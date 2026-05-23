@@ -1338,24 +1338,25 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
           return { subject: s, totalMin, watchedMin, remainMin, totalCount: todos.length, watchedCount: watchedTodos.length };
         }).filter(x => x.totalMin > 0);
 
-        // Forecast based on examDate
-        const allRemainMin = subjectStats.reduce((s, x) => s + x.remainMin, 0);
-        const examDate = settings?.examDate;
-        let forecast = null;
-        if (examDate) {
-          const [yy, mm, dd] = examDate.split("-").map(Number);
-          const exam = new Date(yy, mm - 1, dd);
-          const today0 = new Date(); today0.setHours(0, 0, 0, 0);
-          const daysLeft = Math.max(1, Math.ceil((exam - today0) / 86400000));
-          // Compute recent pace: last 14 days study minutes
-          const last14 = Array.from({ length: 14 }, (_, i) => addDays(todayStr(), -i));
-          const recent = tasks.filter(t => last14.includes(t.date) && t.done && t.kind !== "other");
+        // Forecast per goal
+        const last14 = Array.from({ length: 14 }, (_, i) => addDays(todayStr(), -i));
+        const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+        const goalForecasts = (goals || []).filter(g => g.deadline && (g.subjectIds || []).length > 0).map(g => {
+          const [yy, mm, dd] = g.deadline.split("-").map(Number);
+          const deadline = new Date(yy, mm - 1, dd);
+          const daysLeft = Math.ceil((deadline - today0) / 86400000);
+          // Sum remaining for linked subjects
+          const linkedStats = subjectStats.filter(x => (g.subjectIds || []).includes(x.subject.id));
+          const remainMin = linkedStats.reduce((s, x) => s + x.remainMin, 0);
+          // Pace from recent tasks belonging to linked subjects
+          const recent = tasks.filter(t => last14.includes(t.date) && t.done && t.kind !== "other"
+            && t.subjectId && (g.subjectIds || []).includes(t.subjectId));
           const recentMin = recent.reduce((s, t) => s + (t.duration || 0) * 60, 0);
           const dailyPaceMin = recentMin / 14;
-          const requiredDailyMin = allRemainMin / daysLeft;
+          const requiredDailyMin = daysLeft > 0 ? remainMin / daysLeft : 0;
           const willFinish = dailyPaceMin >= requiredDailyMin;
-          forecast = { daysLeft, dailyPaceMin, requiredDailyMin, willFinish, allRemainMin };
-        }
+          return { goal: g, daysLeft, remainMin, dailyPaceMin, requiredDailyMin, willFinish, linkedStats };
+        }).filter(f => f.daysLeft > 0).sort((a, b) => a.daysLeft - b.daysLeft);
 
         return (
           <>
@@ -1390,33 +1391,46 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
               </div>
             </div>
 
-            {/* Forecast */}
-            {forecast && (
-              <div style={{ ...card(), borderLeft: `4px solid ${forecast.willFinish ? C.green : C.red}` }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 8 }}>
-                  🎯 {settings.examLabel || "試験"}まで {forecast.daysLeft}日 — 達成予測
+            {/* Per-goal forecasts */}
+            {goalForecasts.length === 0 ? (
+              <div style={{ ...card(), textAlign: "center", padding: 16, fontSize: 12, color: C.textMid }}>
+                ゴール画面で「関連する科目」を設定すると、ゴールごとの達成予測が表示されます
+              </div>
+            ) : goalForecasts.map(f => (
+              <div key={f.goal.id} style={{ ...card(), borderLeft: `4px solid ${f.willFinish ? C.green : C.red}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: "50%", background: f.goal.color, display: "inline-block" }} />
+                  <span style={{ flex: 1 }}>{f.goal.title}</span>
+                  <span style={{ color: f.daysLeft < 30 ? C.red : C.textMid }}>あと {f.daysLeft} 日</span>
+                </div>
+                <div style={{ fontSize: 10, color: C.textDim, marginBottom: 8, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                  {f.linkedStats.map(x => (
+                    <span key={x.subject.id} style={{ color: x.subject.color }}>📚 {x.subject.name}</span>
+                  ))}
                 </div>
                 <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 10, color: C.textMid }}>直近14日の平均</div>
                     <div style={{ fontSize: 18, fontFamily: serif, color: C.text }}>
-                      {(forecast.dailyPaceMin / 60).toFixed(1)}h<span style={{ fontSize: 10, color: C.textMid }}>/日</span>
+                      {(f.dailyPaceMin / 60).toFixed(1)}h<span style={{ fontSize: 10, color: C.textMid }}>/日</span>
                     </div>
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 10, color: C.textMid }}>必要ペース</div>
-                    <div style={{ fontSize: 18, fontFamily: serif, color: forecast.willFinish ? C.green : C.red }}>
-                      {(forecast.requiredDailyMin / 60).toFixed(1)}h<span style={{ fontSize: 10, color: C.textMid }}>/日</span>
+                    <div style={{ fontSize: 18, fontFamily: serif, color: f.willFinish ? C.green : C.red }}>
+                      {(f.requiredDailyMin / 60).toFixed(1)}h<span style={{ fontSize: 10, color: C.textMid }}>/日</span>
                     </div>
                   </div>
                 </div>
-                <div style={{ fontSize: 12, color: forecast.willFinish ? C.green : C.red, fontWeight: 700 }}>
-                  {forecast.willFinish
-                    ? `✓ このペースなら間に合う見込み（残り${(forecast.allRemainMin/60).toFixed(0)}h）`
-                    : `⚠ ペース不足（残り${(forecast.allRemainMin/60).toFixed(0)}h / 不足${((forecast.requiredDailyMin - forecast.dailyPaceMin)/60).toFixed(1)}h/日）`}
+                <div style={{ fontSize: 12, color: f.willFinish ? C.green : C.red, fontWeight: 700 }}>
+                  {f.remainMin === 0
+                    ? `✓ 達成済み！`
+                    : f.willFinish
+                      ? `✓ このペースなら間に合う見込み（残り${(f.remainMin/60).toFixed(0)}h）`
+                      : `⚠ ペース不足（残り${(f.remainMin/60).toFixed(0)}h / 不足${((f.requiredDailyMin - f.dailyPaceMin)/60).toFixed(1)}h/日）`}
                 </div>
               </div>
-            )}
+            ))}
 
             {/* Subject progress */}
             {subjectStats.length > 0 && (
@@ -2620,17 +2634,29 @@ function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeekl
 /* ══════════════════════════════════════════════════════
    GOALS VIEW
 ══════════════════════════════════════════════════════ */
-function GoalsView({ goals, setGoals }) {
+function GoalsView({ goals, setGoals, subjects }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ title: "", deadline: addDays(todayStr(), 90), note: "", color: C.blue });
+  const [form, setForm] = useState({ title: "", deadline: addDays(todayStr(), 90), note: "", color: C.blue, subjectIds: [] });
+  const [editId, setEditId] = useState(null);
 
   const COLORS = [C.blue, C.green, C.accent, C.purple, C.red, C.yellow];
 
-  const addGoal = () => {
+  const saveGoal = () => {
     if (!form.title.trim()) return;
-    setGoals(gs => [...gs, { id: genId(), ...form }]);
-    setForm({ title: "", deadline: addDays(todayStr(), 90), note: "", color: C.blue });
+    if (editId) {
+      setGoals(gs => gs.map(g => g.id === editId ? { ...g, ...form } : g));
+      setEditId(null);
+    } else {
+      setGoals(gs => [...gs, { id: genId(), ...form }]);
+    }
+    setForm({ title: "", deadline: addDays(todayStr(), 90), note: "", color: C.blue, subjectIds: [] });
     setShowForm(false);
+  };
+
+  const startEditGoal = (g) => {
+    setForm({ title: g.title, deadline: g.deadline, note: g.note || "", color: g.color, subjectIds: g.subjectIds || [] });
+    setEditId(g.id);
+    setShowForm(true);
   };
 
   const deleteGoal = (id) => setGoals(gs => gs.filter(g => g.id !== id));
@@ -2643,6 +2669,7 @@ function GoalsView({ goals, setGoals }) {
         const deadline = new Date(g.deadline + "T00:00:00");
         const today = new Date();
         const daysLeft = Math.ceil((deadline - today) / 86400000);
+        const linkedSubs = (g.subjectIds || []).map(id => subjects.find(s => s.id === id)).filter(Boolean);
 
         return (
           <div key={g.id} style={{ ...card(), borderLeft: `4px solid ${g.color}` }}>
@@ -2650,6 +2677,15 @@ function GoalsView({ goals, setGoals }) {
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{g.title}</div>
                 {g.note && <div style={{ fontSize: 12, color: C.textMid, marginTop: 3 }}>{g.note}</div>}
+                {linkedSubs.length > 0 && (
+                  <div style={{ fontSize: 10, color: C.textMid, marginTop: 5, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {linkedSubs.map(s => (
+                      <span key={s.id} style={{ color: s.color, fontWeight: 700, background: s.color + "15", padding: "1px 6px", borderRadius: 3 }}>
+                        📚 {s.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: "right", flexShrink: 0 }}>
                 <div style={{ fontSize: 18, fontWeight: 700, color: daysLeft < 14 ? C.red : daysLeft < 30 ? C.yellow : g.color, fontFamily: serif }}>
@@ -2661,7 +2697,10 @@ function GoalsView({ goals, setGoals }) {
               </div>
             </div>
 
-            <button onClick={() => deleteGoal(g.id)} style={{ ...btn(false, C.red, { fontSize: 11, marginTop: 10, padding: "3px 10px" }) }}>削除</button>
+            <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+              <button onClick={() => startEditGoal(g)} style={{ ...btn(false, C.blue, { fontSize: 11, padding: "3px 10px" }) }}>編集</button>
+              <button onClick={() => deleteGoal(g.id)} style={{ ...btn(false, C.red, { fontSize: 11, padding: "3px 10px" }) }}>削除</button>
+            </div>
           </div>
         );
       })}
@@ -2679,6 +2718,28 @@ function GoalsView({ goals, setGoals }) {
             <input type="date" style={input()} value={form.deadline} onChange={e => setForm(f => ({ ...f, deadline: e.target.value }))} />
           </div>
           <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>関連する科目（複数選択可・達成予測に使用）</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {subjects.map(s => {
+                const selected = (form.subjectIds || []).includes(s.id);
+                return (
+                  <button key={s.id} onClick={() => setForm(f => ({
+                    ...f,
+                    subjectIds: selected
+                      ? (f.subjectIds || []).filter(x => x !== s.id)
+                      : [...(f.subjectIds || []), s.id]
+                  }))} style={{
+                    padding: "5px 10px", borderRadius: 5,
+                    background: selected ? s.color : "transparent",
+                    border: `1px solid ${s.color}`,
+                    color: selected ? "#fff" : s.color,
+                    fontFamily: font, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                  }}>{selected && "✓ "}{s.name}</button>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>カラー</div>
             <div style={{ display: "flex", gap: 8 }}>
               {COLORS.map(c => (
@@ -2687,7 +2748,7 @@ function GoalsView({ goals, setGoals }) {
               ))}
             </div>
           </div>
-          <button onClick={addGoal} style={{ ...btn(true, C.accent, { width: "100%", padding: "9px" }) }}>追加</button>
+          <button onClick={saveGoal} style={{ ...btn(true, C.accent, { width: "100%", padding: "9px" }) }}>{editId ? "保存" : "追加"}</button>
         </div>
       )}
     </div>
@@ -2991,7 +3052,7 @@ function App() {
         {view === "subjects" && <SubjectsView subjects={subjects} setSubjects={setSubjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} goals={goals} />}
         {view === "week"   && <WeekView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} />}
         {view === "month"  && <MonthView goals={goals} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} selectedDate={selectedDate} />}
-        {view === "goals"  && <GoalsView goals={goals} setGoals={setGoals} />}
+        {view === "goals"  && <GoalsView goals={goals} setGoals={setGoals} subjects={subjects} />}
       </div>
 
       {showSettings && <SettingsModal settings={settings} setSettings={setSettings} onClose={() => setShowSettings(false)} onReset={resetAll}
