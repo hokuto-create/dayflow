@@ -1,0 +1,3008 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="DayFlow" />
+  <meta name="theme-color" content="#c97a4a" />
+  <title>DayFlow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; height: 100%; overscroll-behavior: none; }
+    body {
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #f7f5f0;
+      color: #1a1a22;
+      -webkit-font-smoothing: antialiased;
+    }
+    #root { min-height: 100%; display: flex; flex-direction: column; }
+    input, select, textarea, button { font-family: inherit; }
+    /* iOS safe area */
+    body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  </style>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react" data-type="module">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ── FONTS ── */
+const fontLink = document.createElement("link");
+fontLink.rel = "stylesheet";
+fontLink.href = "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Playfair+Display:wght@600&display=swap";
+document.head.appendChild(fontLink);
+
+/* ── DESIGN TOKENS ── */
+const C = {
+  bg: "#f7f5f0",
+  surface: "#ffffff",
+  surfaceUp: "#faf8f3",
+  border: "#e5e1d8",
+  borderLight: "#d8d3c7",
+  text: "#1a1a22",
+  textMid: "#6a6a78",
+  textDim: "#a8a8b0",
+  accent: "#c97a4a",
+  accentDim: "#c97a4a15",
+  accentSoft: "#c97a4a35",
+  green: "#3a9d6e",
+  greenDim: "#3a9d6e18",
+  red: "#d14545",
+  redDim: "#d1454518",
+  blue: "#4a8ed1",
+  blueDim: "#4a8ed118",
+  purple: "#8b6fcc",
+  purpleDim: "#8b6fcc18",
+  yellow: "#d4a528",
+  yellowDim: "#d4a52818",
+};
+const font = "'Outfit', sans-serif";
+const serif = "'Playfair Display', serif";
+
+/* ── HELPERS ── */
+const genId = () => Math.random().toString(36).slice(2, 9);
+const todayStr = () => new Date().toISOString().split("T")[0];
+const fmt2 = (n) => String(n).padStart(2, "0");
+const fmtTime = (h) => {
+  const hh = Math.floor(h);
+  const mm = (h % 1) === 0.5 ? "30" : "00";
+  return `${fmt2(hh)}:${mm}`;
+};
+
+const DAYS_JA = ["日", "月", "火", "水", "木", "金", "土"];
+const MONTHS_JA = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
+
+function getWeekDates(baseDate) {
+  const d = new Date(baseDate);
+  const day = d.getDay();
+  const mon = new Date(d);
+  mon.setDate(d.getDate() - ((day + 6) % 7));
+  return Array.from({ length: 7 }, (_, i) => {
+    const x = new Date(mon);
+    x.setDate(mon.getDate() + i);
+    return x.toISOString().split("T")[0];
+  });
+}
+
+function addDays(dateStr, n) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split("T")[0];
+}
+
+/* ── INITIAL DATA ── */
+const SAMPLE_GOALS = [
+  { id: "g1", title: "公認会計士 短答合格", color: C.blue, deadline: "2026-12-01", note: "2026年12月 短答式試験合格" },
+  { id: "g2", title: "講義動画を見終わる", color: C.accent, deadline: "2026-07-31", note: "全科目の講義動画を7月末までに完了" },
+];
+
+function makeSampleTasks(dateStr) {
+  return [
+    { id: genId(), date: dateStr, title: "講義動画を視聴", hour: 9, duration: 2, priority: "high", actual: null, done: false, note: "", goalId: "g2" },
+    { id: genId(), date: dateStr, title: "問題演習・復習", hour: 14, duration: 2, priority: "high", actual: null, done: false, note: "", goalId: "g1" },
+  ];
+}
+
+const SAMPLE_SUBJECTS = [
+  { id: "s_calc", name: "財計", color: "#d14545" },
+  { id: "s_theory", name: "財理", color: "#3a9d6e" },
+  { id: "s_mgmt", name: "管理会計", color: "#d4a528" },
+  { id: "s_law", name: "企業法", color: "#4a8ed1" },
+];
+
+// helper: build a todo (sequential createdAt counter)
+let _todoSeq = 0;
+const _td = (subjectId, text, minutes) => ({
+  id: genId(), subjectId, text, minutes, status: "unwatched", done: false, createdAt: ++_todoSeq,
+});
+
+const SAMPLE_SUBJECT_TODOS = [
+  // 財計(計算) ①〜④ (復習中)
+  { ...(_td("s_calc", "TX1-1 損益計算書・貸借対照表の区分表示", 34)), status: "reviewing" },
+  { ...(_td("s_calc", "TX1-2 現金及び預金", 94)), status: "reviewing" },
+  { ...(_td("s_calc", "TX1-3 手形及び電子記録債権・債務", 41)), status: "reviewing" },
+  { ...(_td("s_calc", "TX1-4 有価証券(その1)", 132)), status: "reviewing" },
+  { ...(_td("s_calc", "TX1-5 有価証券(その2)", 48)), status: "reviewing" },
+  { ...(_td("s_calc", "TX1-6 外貨換算会計(その1)", 100)), status: "reviewing" },
+  { ...(_td("s_calc", "TX1-7 外貨換算会計(その2)", 27)), status: "reviewing" },
+  { ...(_td("s_calc", "TX1-8 貸倒引当金", 65)), status: "reviewing" },
+  { ...(_td("s_calc", "TX1-9 金融商品(その1)", 83)), status: "reviewing" },
+  { ...(_td("s_calc", "TX1-10 ヘッジ会計", 86)), status: "reviewing" },
+  { ...(_td("s_calc", "TX2-1 棚卸資産", 123)), status: "reviewing" },
+  { ...(_td("s_calc", "TX2-2 有形固定資産", 147)), status: "reviewing" },
+  { ...(_td("s_calc", "TX2-3 無形固定資産", 18)), status: "reviewing" },
+  { ...(_td("s_calc", "TX2-4 投資その他の資産", 12)), status: "reviewing" },
+  { ...(_td("s_calc", "TX2-5 繰延資産", 24)), status: "reviewing" },
+  { ...(_td("s_calc", "TX2-6 固定資産の減損(その1)", 66)), status: "reviewing" },
+  { ...(_td("s_calc", "TX2-7 固定資産の減損(その2)", 38)), status: "reviewing" },
+  { ...(_td("s_calc", "TX2-8 研究開発費とソフトウェア", 61)), status: "reviewing" },
+  { ...(_td("s_calc", "TX2-9 収益認識に関する会計基準(その1)", 106)), status: "reviewing" },
+  { ...(_td("s_calc", "TX2-10 収益認識に関する会計基準(その2)", 42)), status: "reviewing" },
+  { ...(_td("s_calc", "TX3-1 リース取引(その1)", 110)), status: "reviewing" },
+  { ...(_td("s_calc", "TX3-2 リース取引(その2)", 16)), status: "reviewing" },
+  { ...(_td("s_calc", "TX3-3 リース取引(その3)", 32)), status: "reviewing" },
+  { ...(_td("s_calc", "TX3-4 資産除去債務", 61)), status: "reviewing" },
+  { ...(_td("s_calc", "TX3-5 退職給付会計(その1)", 137)), status: "reviewing" },
+  { ...(_td("s_calc", "TX3-6 税金", 11)), status: "reviewing" },
+  { ...(_td("s_calc", "TX3-7 税効果会計(その1)", 166)), status: "reviewing" },
+  { ...(_td("s_calc", "TX3-8 税効果会計(その2)", 72)), status: "reviewing" },
+  { ...(_td("s_calc", "TX3-9 会計上の変更及び誤謬の訂正", 72)), status: "reviewing" },
+  { ...(_td("s_calc", "TX3-10 四半期財務諸表", 8)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-1 引当金", 33)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-2 社債", 74)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-3 純資産の部", 45)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-4 自己株式", 50)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-5 新株予約権", 24)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-6 新株予約権付社債", 42)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-7 自己新株予約権", 19)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-8 株主資本等変動計算書(その1)", 21)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-9 株主資本等変動計算書(その2)", 22)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-10 分配可能額", 51)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-11 ストック・オプション", 108)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-12 取締役の報酬等として株式を無償交付する取引に関する取扱い", 38)), status: "reviewing" },
+  { ...(_td("s_calc", "TX4-13 1株当たり情報", 59)), status: "reviewing" },
+
+  // 財計(計算) ⑤〜
+  _td("s_calc", "TX5-1 本支店会計", 119),
+  _td("s_calc", "TX5-2 連結財務諸表の雛形", 13),
+  _td("s_calc", "TX5-3 連結財務諸表の基礎知識", 16),
+  _td("s_calc", "TX5-4 連結財務諸表作成の簿記一巡", 25),
+  _td("s_calc", "TX5-5 資本連結① 投資と資本の相殺消去", 169),
+  _td("s_calc", "TX5-6 資本連結② 子会社の資産及び負債の時価評価", 20),
+  _td("s_calc", "TX5-7 資本連結③ 子会社株式の追加取得", 32),
+  _td("s_calc", "TX5-8 資本連結④ 子会社株式の一部売却", 43),
+  _td("s_calc", "TX5-9 資本連結⑤ 子会社の増資", 75),
+  _td("s_calc", "TX5-10 資本連結⑥ 子会社が保有する自己株式(その1)", 9),
+  _td("s_calc", "TX5-11 成果連結① ダウン・ストリーム", 210),
+  _td("s_calc", "TX5-12 成果連結② アップ・ストリーム", 77),
+  _td("s_calc", "TX5-13 持分法", 136),
+  _td("s_calc", "TX6-2 評価差額の実現", 38),
+  _td("s_calc", "TX6-3 子会社株式の一部売却に関連する法人税等", 22),
+  _td("s_calc", "TX6-4 連結財務諸表における税効果会計(その1)", 121),
+  _td("s_calc", "TX6-5 連結財務諸表における税効果会計(その2)", 48),
+  _td("s_calc", "TX6-6 支配獲得までに株式を段階的に取得している場合", 21),
+  _td("s_calc", "TX6-7 持分法から連結への移行", 28),
+  _td("s_calc", "TX6-8 持分法適用までに株式を段階的に取得している場合", 18),
+  _td("s_calc", "TX6-9 連結除外", 48),
+  _td("s_calc", "TX6-10 連結から持分法への移行", 21),
+  _td("s_calc", "TX6-11 持分法適用除外", 14),
+  _td("s_calc", "TX6-12 間接所有", 55),
+  _td("s_calc", "TX6-13 取得関連費用", 55),
+  _td("s_calc", "TX6-14 連結財務諸表の基礎知識(その2)", 16),
+  _td("s_calc", "TX6-15 子会社の欠損", 25),
+  _td("s_calc", "TX6-16 関連会社の欠損", 23),
+  _td("s_calc", "TX6-17 アップ・ストリーム+追加取得(一部売却)", 24),
+  _td("s_calc", "TX7-2 子会社及び関連会社におけるその他有価証券評価差額金", 56),
+  _td("s_calc", "TX7-3 在外子会社の財務諸表の換算", 32),
+  _td("s_calc", "TX7-4 在外子会社の連結", 79),
+  _td("s_calc", "TX7-5 連結財務諸表における包括利益(その1)", 62),
+  _td("s_calc", "TX7-6 連結財務諸表における包括利益(その2)", 63),
+  _td("s_calc", "TX7-7 連結財務諸表における退職給付会計", 55),
+  _td("s_calc", "TX7-8 子会社の新株予約権", 21),
+  _td("s_calc", "TX7-9 セグメント情報", 36),
+  _td("s_calc", "TX8-1 企業結合(その1)", 110),
+  _td("s_calc", "TX8-2 企業結合(その2)", 48),
+  _td("s_calc", "TX8-3 企業結合(その3)", 93),
+  _td("s_calc", "TX8-4 事業分離(その1)", 130),
+  _td("s_calc", "TX8-5 共同支配企業の形成", 25),
+  _td("s_calc", "TX8-6 被結合企業の株主に係る会計処理", 86),
+  _td("s_calc", "TX8-7 その他有価証券評価差額金がある場合の企業結合・事業分離", 37),
+  _td("s_calc", "TX9-1 キャッシュ・フロー計算書", 237),
+  _td("s_calc", "TX9-2 連結キャッシュ・フロー計算書(その1)", 61),
+  _td("s_calc", "TX9-3 連結キャッシュ・フロー計算書(その2)", 56),
+  _td("s_calc", "TX10-1 有価証券(その3)", 24),
+  _td("s_calc", "TX10-2 金融商品(その2)", 39),
+  _td("s_calc", "TX10-3 退職給付会計(その2)", 39),
+  _td("s_calc", "TX10-4 製造業会計", 24),
+  _td("s_calc", "TX10-5 本社工場会計", 29),
+  _td("s_calc", "TX10-6 子会社が保有する自己株式(その2)", 36),
+  _td("s_calc", "TX10-7 権利落ち株式", 15),
+  _td("s_calc", "TX10-8 子会社が保有する親会社株式", 25),
+  _td("s_calc", "TX10-9 成果連結 手形取引・社債取引", 33),
+  _td("s_calc", "TX10-10 企業結合(その4)", 32),
+  _td("s_calc", "TX10-11 事業分離(その2)", 38),
+  _td("s_calc", "TX10-12 連結キャッシュ・フロー計算書(その3)", 21),
+  _td("s_calc", "TX10-13 連結キャッシュ・フロー計算書(その4)", 54),
+  _td("s_calc", "追加① 中間財務諸表", 41),
+  _td("s_calc", "追加② 新リース基準", 61),
+
+  // 財計(理論)
+  _td("s_theory", "第1章 財務会計の機能と制度", 96),
+  _td("s_theory", "第2章 財務会計の基礎概念", 97),
+  _td("s_theory", "第3章 「企業会計原則」の一般原則等", 101),
+  _td("s_theory", "第4章 財務諸表の表示", 44),
+  _td("s_theory", "第5章 損益会計", 161),
+  _td("s_theory", "第6章 資産会計総論", 58),
+  _td("s_theory", "第7章 棚卸資産", 105),
+  _td("s_theory", "第8章 固定資産", 133),
+  _td("s_theory", "第9章 繰延資産", 63),
+  _td("s_theory", "第10章 研究開発費等", 93),
+  _td("s_theory", "第11章 負債会計", 103),
+  _td("s_theory", "第12章 純資産-総論", 112),
+  _td("s_theory", "第13章 純資産-自己株式", 107),
+  _td("s_theory", "第14章 純資産-その他の資本剰余金", 57),
+  _td("s_theory", "第15章 財務会計の概念フレームワーク", 232),
+  _td("s_theory", "第16章 会計方針の開示, 会計上の変更及び誤謬の訂正", 99),
+  _td("s_theory", "第17章 金融商品会計", 296),
+  _td("s_theory", "第18章 連結会計", 249),
+  _td("s_theory", "第19章 持分法会計", 67),
+  _td("s_theory", "第20章 包括利益の表示", 41),
+  _td("s_theory", "第21章 関連当事者の開示", 40),
+  _td("s_theory", "第22章 外貨換算会計", 194),
+  _td("s_theory", "第23章 ストック・オプション等", 148),
+  _td("s_theory", "第24章 固定資産の減損", 186),
+  _td("s_theory", "第25章 棚卸資産の期末評価", 82),
+  _td("s_theory", "第26章 退職給付会計", 176),
+  _td("s_theory", "第27章 資産除去債務", 99),
+  _td("s_theory", "第28章 税効果会計", 226),
+  _td("s_theory", "第29章 企業結合", 228),
+  _td("s_theory", "第30章 事業分離等", 111),
+  _td("s_theory", "第31章 キャッシュ・フロー計算書", 94),
+  _td("s_theory", "第32章 中間財務諸表", 54),
+  _td("s_theory", "第33章 セグメント情報等", 59),
+  _td("s_theory", "第34章 1株当たり当期純利益", 28),
+  _td("s_theory", "第35章 収益認識", 260),
+  _td("s_theory", "第36章 現行・リース基準/新・リース基準", 329),
+
+  // 管理会計
+  _td("s_mgmt", "オリエンテーション", 11),
+  _td("s_mgmt", "第I部-1-1 原価計算基準", 32),
+  _td("s_mgmt", "第I部-1-2 原価計算制度と特殊原価調査", 26),
+  _td("s_mgmt", "第I部-1-3 原価の要件と非原価項目", 19),
+  _td("s_mgmt", "第I部-1-4 原価の諸概念(基準4)", 16),
+  _td("s_mgmt", "第I部-1-5 原価の分類と製造原価の分類(基準8)", 33),
+  _td("s_mgmt", "第I部-1-6 製品原価計算の手続と工業簿記", 31),
+  _td("s_mgmt", "第I部-2-1 費目別計算の手続", 19),
+  _td("s_mgmt", "第I部-2-2 材料費の計算", 73),
+  _td("s_mgmt", "第I部-2-3 労務費の計算", 68),
+  _td("s_mgmt", "第I部-2-4 経費の計算", 29),
+  _td("s_mgmt", "第I部-3-1 製造間接費の配賦", 19),
+  _td("s_mgmt", "第I部-3-2 製造間接費の予定配賦", 50),
+  _td("s_mgmt", "第I部-3-3 基準操業度", 27),
+  _td("s_mgmt", "第I部-3-4 製造間接費予算", 58),
+  _td("s_mgmt", "第I部-4-1 部門別計算の基礎", 34),
+  _td("s_mgmt", "第I部-4-2 部門別計算の手続", 110),
+  _td("s_mgmt", "第I部-4-3 製造部門費の予定配賦", 56),
+  _td("s_mgmt", "第I部-5-1 製品別計算の基礎", 23),
+  _td("s_mgmt", "第I部-5-2 個別原価計算の基礎", 42),
+  _td("s_mgmt", "第I部-5-3 仕損の会計処理(基準35)", 92),
+  _td("s_mgmt", "第I部-5-4 作業屑の会計処理(基準36)", 28),
+  _td("s_mgmt", "第I部-6-1 総合原価計算の基礎", 28),
+  _td("s_mgmt", "第I部-6-2 期首仕掛品があるときの計算(基準24)", 38),
+  _td("s_mgmt", "第I部-6-3 追加材料の投入", 45),
+  _td("s_mgmt", "第I部-6-4 仕損・減損の会計処理", 142),
+  _td("s_mgmt", "第I部-6-5 工程別総合原価計算", 75),
+  _td("s_mgmt", "第I部-6-6 組別総合原価計算(基準23)", 16),
+  _td("s_mgmt", "第I部-6-7 等級別総合原価計算(基準22)", 77),
+  _td("s_mgmt", "第I部-6-8 連産品および副産物の計算", 99),
+  _td("s_mgmt", "第I部-7-1 標準原価計算の基礎", 49),
+  _td("s_mgmt", "第I部-7-2 標準原価計算の手続", 155),
+  _td("s_mgmt", "第I部-7-3 標準原価差異の詳細な分析", 84),
+  _td("s_mgmt", "第I部-7-4 仕損・減損の発生と標準原価計算", 130),
+  _td("s_mgmt", "第I部-8-1 直接原価計算の意義", 34),
+  _td("s_mgmt", "第I部-8-2 全部原価計算と直接原価計算の相違", 6),
+  _td("s_mgmt", "第I部-8-3 固定費調整(基準30)", 16),
+  _td("s_mgmt", "第I部-8-4 直接標準原価計算", 12),
+  _td("s_mgmt", "第I部-8-5 セグメント損益の計算", 14),
+  _td("s_mgmt", "第II部-1-1 管理会計の意義と機能", 20),
+  _td("s_mgmt", "第II部-1-2 戦略と管理会計の関係", 13),
+  _td("s_mgmt", "第II部-1-3 品質原価計算", 24),
+  _td("s_mgmt", "第II部-2-1 財務諸表分析", 7),
+  _td("s_mgmt", "第II部-2-2 収益性分析", 69),
+  _td("s_mgmt", "第II部-2-3 安全性分析", 29),
+  _td("s_mgmt", "第II部-2-4 キャッシュ・フロー分析", 9),
+  _td("s_mgmt", "第II部-3-1 CVP分析の基礎", 21),
+  _td("s_mgmt", "第II部-3-2 CVP分析の方法", 71),
+  _td("s_mgmt", "第II部-3-3 CVP分析の前提と応用", 26),
+  _td("s_mgmt", "第II部-3-4 原価予測の方法", 19),
+  _td("s_mgmt", "第II部-4-1 予算管理の基礎", 15),
+  _td("s_mgmt", "第II部-4-2 予算の体系と種類", 19),
+  _td("s_mgmt", "第II部-4-3 予算編成", 32),
+  _td("s_mgmt", "第II部-4-4 予算統制", 65),
+  _td("s_mgmt", "第II部-4-5 予算管理と人間行動", 19),
+  _td("s_mgmt", "第II部-4-6 予算管理システムが抱える問題点", 8),
+  _td("s_mgmt", "第II部-5-1 資金管理の意義", 9),
+  _td("s_mgmt", "第II部-5-2 運転資金の管理", 33),
+  _td("s_mgmt", "第II部-6-1 原価管理の新しい体系", 9),
+  _td("s_mgmt", "第II部-6-2 原価企画", 90),
+  _td("s_mgmt", "第II部-6-3 原価維持と原価改善", 24),
+  _td("s_mgmt", "第II部-6-4 原価企画・原価維持・原価改善の相互関係", 24),
+  _td("s_mgmt", "第II部-7-1 伝統的な原価計算の問題点", 19),
+  _td("s_mgmt", "第II部-7-2 ABC", 41),
+  _td("s_mgmt", "第II部-7-3 ABM", 18),
+  _td("s_mgmt", "第II部-8-1 意思決定の基礎", 24),
+  _td("s_mgmt", "第II部-8-2 受注可否の意思決定", 28),
+  _td("s_mgmt", "第II部-8-3 自製か購入かの意思決定", 28),
+  _td("s_mgmt", "第II部-8-4 販売か追加加工かの意思決定", 12),
+  _td("s_mgmt", "第II部-8-5 最適セールス・ミックスの意思決定", 34),
+  _td("s_mgmt", "第II部-8-6 経済的発注量の計算", 22),
+  _td("s_mgmt", "第II部-8-7 価格決定", 12),
+  _td("s_mgmt", "第II部-9-1 期間損益とキャッシュ・フロー", 11),
+  _td("s_mgmt", "第II部-9-2 設備投資案の評価方法", 76),
+  _td("s_mgmt", "第II部-9-3 NPV法とIRR法の対比", 31),
+  _td("s_mgmt", "第II部-9-4 キャッシュ・フローの予測", 44),
+  _td("s_mgmt", "第II部-9-5 法人税等の影響", 33),
+  _td("s_mgmt", "第II部-9-6 資本コスト", 12),
+  _td("s_mgmt", "第II部-10-1 分権化と管理会計", 20),
+  _td("s_mgmt", "第II部-10-2 事業部の業績測定", 50),
+  _td("s_mgmt", "第II部-10-3 内部振替価格", 61),
+  _td("s_mgmt", "第II部-10-4 日本企業における事業部制の展開", 18),
+  _td("s_mgmt", "第II部-10-5 企業価値・事業価値の評価", 33),
+  _td("s_mgmt", "第III部 補足-1 費目別計算", 18),
+  _td("s_mgmt", "第III部 補足-2 製造間接費の配賦計算", 11),
+  _td("s_mgmt", "第III部 補足-3 標準原価計算", 118),
+  _td("s_mgmt", "第III部 補足-4 管理会計総論", 68),
+  _td("s_mgmt", "第III部 補足-5 CVP分析", 16),
+  _td("s_mgmt", "第III部 補足-6 資金管理", 15),
+  _td("s_mgmt", "第III部 補足-7 ABC/ABM", 13),
+  _td("s_mgmt", "第III部 補足-8 設備投資意思決定", 6),
+  _td("s_mgmt", "第III部 補足-9 分権組織とグループ経営", 46),
+
+  // 企業法
+  _td("s_law", "ガイダンス", 25),
+  _td("s_law", "TX1 重要な定義", 48),
+  _td("s_law", "TX1 会社法の意義・会社の概念", 41),
+  _td("s_law", "TX1 株式会社の意義と特色", 26),
+  _td("s_law", "TX1 機関総説", 47),
+  _td("s_law", "TX1 株主総会1", 121),
+  _td("s_law", "TX1 株主総会2", 131),
+  _td("s_law", "TX1 種類株主総会", 29),
+  _td("s_law", "TX1 株主総会資料の電子提供制度", 85),
+  _td("s_law", "TX1 株主総会決議の瑕疵", 83),
+  _td("s_law", "TX1 取締役", 81),
+  _td("s_law", "TX1 取締役会", 116),
+  _td("s_law", "TX1 代表取締役", 116),
+  _td("s_law", "TX1 取締役の義務1", 120),
+  _td("s_law", "TX1 取締役の義務2", 114),
+  _td("s_law", "TX1 会計参与", 28),
+  _td("s_law", "TX1 監査役・監査役会", 83),
+  _td("s_law", "TX1 会計監査人", 38),
+  _td("s_law", "TX1 指名委員会等設置会社", 115),
+  _td("s_law", "TX1 監査等委員会設置会社", 57),
+  _td("s_law", "TX1 任務懈怠責任", 73),
+  _td("s_law", "TX1 役員等の第三者に対する損害賠償責任", 88),
+  _td("s_law", "TX1 補償契約・役員等のために締結される保険契約", 60),
+  _td("s_law", "TX1 株主の監督是正権", 136),
+  _td("s_law", "TX1 株式の意義・株主の権利", 35),
+  _td("s_law", "TX1 種類株式", 149),
+  _td("s_law", "TX1 株主平等の原則", 17),
+  _td("s_law", "TX1 株券", 91),
+  _td("s_law", "TX1 株式譲渡自由の原則", 36),
+  _td("s_law", "TX1 株式の譲渡制限", 104),
+  _td("s_law", "TX1 自己の株式の取得", 184),
+  _td("s_law", "TX1 株主名簿", 127),
+  _td("s_law", "TX1 株式振替制度", 66),
+  _td("s_law", "TX1 株式担保", 71),
+  _td("s_law", "TX1 株式の消却その他", 130),
+  _td("s_law", "TX1 特別支配株主の株式等売渡請求", 46),
+  _td("s_law", "TX2 設立手続の概要", 118),
+  _td("s_law", "TX2 定款の作成・記載事項など", 17),
+  _td("s_law", "TX2 変態設立事項", 76),
+  _td("s_law", "TX2 出資の確定", 36),
+  _td("s_law", "TX2 発起人・設立中の会社", 98),
+  _td("s_law", "TX2 設立に関する責任", 52),
+  _td("s_law", "TX2 設立の瑕疵", 37),
+  _td("s_law", "TX2 株式会社の資金調達方法", 6),
+  _td("s_law", "TX2 募集株式の発行等1", 154),
+  _td("s_law", "TX2 募集株式の発行等2", 81),
+  _td("s_law", "TX2 新株予約権の発行・交付・割当て", 179),
+  _td("s_law", "TX2 社債の発行・交付", 104),
+  _td("s_law", "TX2 株式会社の計算等", 115),
+  _td("s_law", "TX2 持分会社", 108),
+  _td("s_law", "TX2 事業譲渡等", 83),
+  _td("s_law", "TX2 組織再編行為(手続以外)", 122),
+  _td("s_law", "TX2 組織再編行為の手続1", 79),
+  _td("s_law", "TX2 組織再編行為の手続2", 169),
+  _td("s_law", "TX2 株式会社の定款変更・解散・清算", 17),
+  _td("s_law", "TX2 特例有限会社・外国会社", 22),
+  _td("s_law", "TX2 会社法総則", 108),
+  _td("s_law", "TX2 商法総則・商行為法1", 101),
+  _td("s_law", "TX2 商法総則・商行為法2", 159),
+  _td("s_law", "TX2 商法総則・商行為法3", 123),
+  _td("s_law", "金商法(1)総論", 108),
+  _td("s_law", "金商法(2)発行開示", 145),
+  _td("s_law", "金商法(3)継続開示", 60),
+  _td("s_law", "金商法(4)公開買付け規制", 87),
+  _td("s_law", "金商法(5)大量保有報告制度", 33),
+  _td("s_law", "金商法(6)規制違反の責任", 35),
+];
+
+/* ── SHARED STYLES ── */
+const card = (extra = {}) => ({
+  background: C.surface,
+  border: `1px solid ${C.border}`,
+  borderRadius: 14,
+  padding: 20,
+  ...extra,
+});
+
+const btn = (active = false, color = C.accent, extra = {}) => ({
+  background: active ? color : "transparent",
+  color: active ? "#fff" : C.textMid,
+  border: `1px solid ${active ? color : C.border}`,
+  borderRadius: 8,
+  padding: "6px 14px",
+  fontSize: 13,
+  fontFamily: font,
+  fontWeight: 600,
+  cursor: "pointer",
+  transition: "all .15s",
+  ...extra,
+});
+
+const input = (extra = {}) => ({
+  background: C.surfaceUp,
+  border: `1px solid ${C.border}`,
+  borderRadius: 8,
+  color: C.text,
+  fontFamily: font,
+  fontSize: 13,
+  padding: "7px 12px",
+  outline: "none",
+  width: "100%",
+  boxSizing: "border-box",
+  ...extra,
+});
+
+/* ══════════════════════════════════════════════════════
+   NAV
+══════════════════════════════════════════════════════ */
+const VIEWS = [
+  { id: "day",     label: "今日",   icon: "🌅" },
+  { id: "review",  label: "振り返り", icon: "🌙" },
+  { id: "subjects",label: "科目",   icon: "📚" },
+  { id: "week",    label: "週次",   icon: "📆" },
+  { id: "month",   label: "月次",   icon: "📅" },
+  { id: "goals",   label: "ゴール", icon: "🎯" },
+];
+
+function Nav({ view, setView }) {
+  return (
+    <div style={{
+      display: "flex", gap: 4, padding: "8px 16px",
+      background: C.surface, borderBottom: `1px solid ${C.border}`,
+      overflowX: "auto", flexShrink: 0,
+    }}>
+      {VIEWS.map(v => (
+        <button key={v.id} onClick={() => setView(v.id)} style={{
+          ...btn(view === v.id),
+          display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap",
+          padding: "6px 12px",
+        }}>
+          <span>{v.icon}</span>
+          <span style={{ fontSize: 12 }}>{v.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   DAY PLANNER VIEW
+══════════════════════════════════════════════════════ */
+function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjects, subjectTodos, setSubjectTodos, settings }) {
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ title: "", date: selectedDate, hour: 9, duration: 1, priority: "medium", note: "", goalId: "", kind: "study" });
+  const [editId, setEditId] = useState(null);
+  const [extraDates, setExtraDates] = useState([]); // additional dates for bulk add
+  const [showBulk, setShowBulk] = useState(false);
+  const [understandingModal, setUnderstandingModal] = useState(null); // task being completed
+  const [scheduleModal, setScheduleModal] = useState(null); // unscheduled task to schedule
+
+  const dayTasks = tasks.filter(t => t.date === selectedDate && t.hour != null).sort((a, b) => a.hour - b.hour);
+  const unscheduledTasks = tasks.filter(t => t.date === selectedDate && t.hour == null);
+
+  const saveTask = () => {
+    if (!form.title.trim()) return;
+    if (editId) {
+      setTasks(ts => ts.map(t => t.id === editId ? { ...t, ...form } : t));
+      setEditId(null);
+    } else {
+      // Bulk add: main date + extraDates
+      const dates = [form.date, ...extraDates].filter((d, i, a) => a.indexOf(d) === i);
+      const { date: _d, ...rest } = form;
+      const newTasks = dates.map(d => ({ id: genId(), done: false, actual: null, ...rest, date: d }));
+      setTasks(ts => [...ts, ...newTasks]);
+    }
+    setForm({ title: "", date: selectedDate, hour: 9, duration: 1, priority: "medium", note: "", goalId: "", kind: "study" });
+    setExtraDates([]);
+    setShowBulk(false);
+    setShowForm(false);
+  };
+
+  const deleteTask = (id) => setTasks(ts => ts.filter(t => t.id !== id));
+
+  // Days until next review based on understanding (1-4)
+  const REVIEW_DAYS = { 1: 1, 2: 3, 3: 7, 4: null }; // 4=◎ no review needed
+
+  const completeWithUnderstanding = (task, level) => {
+    // Mark task done
+    setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true, understanding: level } : t));
+    // Sync subject TODO
+    if (task.subjectTodoId) {
+      setSubjectTodos(sts => sts.map(s => s.id === task.subjectTodoId
+        ? { ...s, status: "done", done: true, understanding: level } : s));
+    }
+    // Schedule review task if not perfect
+    const days = REVIEW_DAYS[level];
+    if (days && task.kind !== "other") {
+      const reviewDate = addDays(task.date, days);
+      const reviewTitle = task.title.startsWith("復習: ") ? task.title : `復習: ${task.title}`;
+      setTasks(ts => [...ts, {
+        id: genId(), date: reviewDate, title: reviewTitle,
+        hour: null, duration: Math.min(task.duration, 1),
+        priority: level === 1 ? "high" : level === 2 ? "medium" : "low",
+        actual: null, done: false, note: "", goalId: task.goalId,
+        kind: "study", subjectId: task.subjectId, subjectTodoId: task.subjectTodoId,
+        isReview: true, reviewOf: task.id,
+      }]);
+    }
+    setUnderstandingModal(null);
+  };
+
+  const toggleDone = (task) => {
+    // If unchecking, just uncheck
+    if (task.done) {
+      setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: false } : t));
+      return;
+    }
+    // If non-study, just check
+    if (task.kind === "other") {
+      setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true } : t));
+      return;
+    }
+    // Open understanding modal
+    setUnderstandingModal(task);
+  };
+
+  const startEdit = (t) => {
+    setForm({ title: t.title, date: t.date, hour: t.hour, duration: t.duration, priority: t.priority, note: t.note || "", goalId: t.goalId || "", kind: t.kind || "study" });
+    setEditId(t.id);
+    setExtraDates([]);
+    setShowBulk(false);
+    setShowForm(true);
+  };
+
+  const priorityColor = { high: C.red, medium: C.yellow, low: C.green };
+  const priorityLabel = { high: "高", medium: "中", low: "低" };
+
+  const startH = settings?.dayStartHour ?? 5;
+  const endH = settings?.dayEndHour ?? 26;
+  const hours = Array.from({ length: endH - startH }, (_, i) => i + startH);
+
+  return (
+    <div style={{ padding: 16, maxWidth: 600, margin: "0 auto" }}>
+      {/* Date selector */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        <button onClick={() => setSelectedDate(addDays(selectedDate, -7))} style={{ ...btn(), padding: "5px 8px", fontSize: 11 }}>‹‹ 1週</button>
+        <button onClick={() => setSelectedDate(addDays(selectedDate, -1))} style={{ ...btn(), padding: "5px 10px" }}>‹</button>
+        <div style={{ flex: 1, textAlign: "center", cursor: "pointer", position: "relative" }}
+          onClick={() => document.getElementById("date-jump")?.showPicker?.()}>
+          <div style={{ fontFamily: serif, fontSize: 18, color: C.text }}>
+            {(() => {
+              const d = new Date(selectedDate + "T00:00:00");
+              const isCurYear = d.getFullYear() === new Date().getFullYear();
+              return isCurYear
+                ? d.toLocaleDateString("ja-JP", { month: "long", day: "numeric" })
+                : d.toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" });
+            })()}
+          </div>
+          <div style={{ fontSize: 12, color: C.textMid }}>
+            {DAYS_JA[new Date(selectedDate + "T00:00:00").getDay()]}曜日
+            {selectedDate === todayStr() && <span style={{ color: C.accent, marginLeft: 6 }}>• 今日</span>}
+          </div>
+          <input id="date-jump" type="date" value={selectedDate}
+            onChange={e => e.target.value && setSelectedDate(e.target.value)}
+            style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", border: "none" }} />
+        </div>
+        <button onClick={() => setSelectedDate(addDays(selectedDate, 1))} style={{ ...btn(), padding: "5px 10px" }}>›</button>
+        <button onClick={() => setSelectedDate(addDays(selectedDate, 7))} style={{ ...btn(), padding: "5px 8px", fontSize: 11 }}>1週 ››</button>
+      </div>
+
+      {/* Quick jump bar */}
+      <div style={{ display: "flex", gap: 5, marginBottom: 12, overflowX: "auto" }}>
+        <button onClick={() => setSelectedDate(todayStr())} style={{ ...btn(selectedDate === todayStr(), C.accent, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>今日</button>
+        <button onClick={() => setSelectedDate(addDays(todayStr(), 1))} style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>明日</button>
+        <button onClick={() => setSelectedDate(addDays(todayStr(), 3))} style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>3日後</button>
+        <button onClick={() => setSelectedDate(addDays(todayStr(), 7))} style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>1週間後</button>
+        <button onClick={() => setSelectedDate(addDays(todayStr(), 30))} style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>1ヶ月後</button>
+        <button onClick={() => setSelectedDate(addDays(todayStr(), 90))} style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>3ヶ月後</button>
+      </div>
+
+      {/* Overdue reviews from previous days */}
+      {(() => {
+        const today = todayStr();
+        if (selectedDate !== today) return null;
+        const overdueReviews = tasks.filter(t => t.isReview && !t.done && t.date < today);
+        if (overdueReviews.length === 0) return null;
+        return (
+          <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff0eb", borderColor: C.red + "60" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.red, marginBottom: 8 }}>
+              🔁 期限超過の復習（{overdueReviews.length}件）— 今日に持ってくる？
+            </div>
+            {overdueReviews.slice(0, 5).map(t => {
+              const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
+              const daysLate = Math.floor((new Date(today) - new Date(t.date)) / 86400000);
+              return (
+                <div key={t.id} style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "6px 8px", borderRadius: 6,
+                  background: C.surface, border: `1px solid ${C.border}`,
+                  marginBottom: 6,
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, color: C.text, fontWeight: 500,
+                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+                    }}>{t.title}</div>
+                    <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
+                      {daysLate}日遅れ
+                      {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
+                    </div>
+                  </div>
+                  <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null } : x))}
+                    style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>今日に</button>
+                  <button onClick={() => deleteTask(t.id)}
+                    style={{ ...btn(false, C.red, { fontSize: 10, padding: "3px 6px" }) }}>✕</button>
+                </div>
+              );
+            })}
+            {overdueReviews.length > 5 && (
+              <div style={{ fontSize: 10, color: C.textMid, textAlign: "center", marginTop: 4 }}>
+                他 {overdueReviews.length - 5} 件
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Unscheduled tasks */}
+      {unscheduledTasks.length > 0 && (
+        <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff8ec", borderColor: C.yellow + "60" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.yellow, marginBottom: 8 }}>
+            ⏱ 未スケジュール（{unscheduledTasks.length}件）— タップで時間を割り振る
+          </div>
+          {unscheduledTasks.map(t => {
+            const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
+            return (
+              <div key={t.id} style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "6px 8px", borderRadius: 6,
+                background: t.isReview ? "#fff5e6" : C.surface,
+                border: `1px solid ${t.isReview ? C.yellow + "50" : C.border}`,
+                marginBottom: 6,
+              }}>
+                <div onClick={() => setScheduleModal(t)} style={{
+                  flex: 1, cursor: "pointer", minWidth: 0,
+                }}>
+                  <div style={{ fontSize: 13, color: C.text, fontWeight: 500,
+                    textDecoration: t.done ? "line-through" : "none",
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+                  }}>{t.title}</div>
+                  <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
+                    {t.duration}時間
+                    {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
+                    {t.isReview && <span style={{ color: C.yellow, marginLeft: 6, fontWeight: 700 }}>🔁 復習</span>}
+                  </div>
+                </div>
+                <button onClick={() => setScheduleModal(t)}
+                  style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>時間設定</button>
+                <button onClick={() => deleteTask(t.id)}
+                  style={{ ...btn(false, C.red, { fontSize: 10, padding: "3px 6px" }) }}>✕</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Timeline */}
+      <div style={{ ...card(), marginBottom: 12, padding: 0, overflow: "hidden", position: "relative" }}>
+        {/* Hour grid */}
+        {hours.map(h => {
+          // hour slot h is occupied if any task overlaps with [h, h+1)
+          const occupied = dayTasks.some(t => t.hour < h + 1 && t.hour + t.duration > h);
+          return (
+            <div key={h} style={{
+              display: "flex", alignItems: "stretch", height: 44,
+              borderBottom: `1px solid ${C.border}`,
+            }}>
+              <div style={{
+                width: 44, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 11, color: C.textDim, fontWeight: 600,
+                borderRight: `1px solid ${C.border}`,
+              }}>{fmt2(h)}</div>
+              <div style={{ flex: 1, padding: "4px 8px", display: "flex", alignItems: "center" }}>
+                {!occupied && (
+                  <button onClick={() => { setForm(f => ({ ...f, hour: h, date: selectedDate })); setShowForm(true); setEditId(null); }}
+                    style={{
+                      background: "none", border: "none", color: C.textDim, fontSize: 12,
+                      cursor: "pointer", fontFamily: font, padding: "2px 6px",
+                    }}>+ 追加</button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {/* Task overlays */}
+        {dayTasks.map(t => {
+          const baseHour = Math.floor(t.hour);
+          const startIdx = hours.indexOf(baseHour);
+          if (startIdx < 0) return null;
+          const fracOffset = (t.hour - baseHour) * 44;
+          const top = startIdx * 44 + fracOffset + 4;
+          const height = t.duration * 44 - 8;
+          return (
+            <div key={t.id} style={{
+              position: "absolute", top, left: 52, right: 8, height,
+              background: t.kind === "other" ? "#ececec" : t.isReview ? "#fff5e6" : "#fbeee4",
+              border: `1px solid ${t.kind === "other" ? "#bfbfbf" : t.isReview ? C.yellow : C.accentSoft}`,
+              borderRadius: 8, padding: "6px 10px",
+              display: "flex", alignItems: "center", gap: 8,
+              boxSizing: "border-box",
+              zIndex: 2,
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, textDecoration: t.done ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {t.title}
+                </div>
+                <div style={{ fontSize: 11, color: C.textMid, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {fmtTime(t.hour)}〜{fmtTime(t.hour + t.duration)}
+                  {t.kind !== "other" && (
+                    <span style={{ marginLeft: 8, color: priorityColor[t.priority] }}>
+                      {priorityLabel[t.priority]}
+                    </span>
+                  )}
+                  {t.subjectId && subjects.find(s => s.id === t.subjectId) && (
+                    <span style={{ marginLeft: 8, color: subjects.find(s => s.id === t.subjectId).color, fontWeight: 600 }}>
+                      📚 {subjects.find(s => s.id === t.subjectId).name}
+                    </span>
+                  )}
+                  {t.goalId && goals.find(g => g.id === t.goalId) && (
+                    <span style={{ marginLeft: 8, color: goals.find(g => g.id === t.goalId).color }}>
+                      🎯 {goals.find(g => g.id === t.goalId).title.slice(0, 8)}…
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button onClick={() => toggleDone(t)}
+                  style={{ ...btn(t.done, C.green, { padding: "3px 7px", fontSize: 11 }) }}>
+                  {t.done ? "✓" : "○"}
+                </button>
+                <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, hour: null } : x))}
+                  title="時間を外す" style={{ ...btn(false, C.yellow, { padding: "3px 7px", fontSize: 11 }) }}>⏱</button>
+                <button onClick={() => startEdit(t)} style={{ ...btn(false, C.blue, { padding: "3px 8px", fontSize: 11, minWidth: 28 }) }}>編集</button>
+                <button onClick={() => deleteTask(t.id)} style={{ ...btn(false, C.red, { padding: "3px 8px", fontSize: 11, minWidth: 28 }) }}>✕</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add button */}
+      <button onClick={() => {
+        if (!showForm) setForm(f => ({ ...f, date: selectedDate }));
+        setShowForm(!showForm);
+        setEditId(null);
+      }} style={{
+        ...btn(showForm, C.accent, { width: "100%", padding: "10px", fontSize: 14 }),
+      }}>
+        {showForm ? "✕ 閉じる" : "+ タスクを追加"}
+      </button>
+
+      {/* Form Modal */}
+      {showForm && (
+        <div style={{
+          position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+        }} onClick={() => { setShowForm(false); setEditId(null); }}>
+          <div style={{
+            ...card({ maxWidth: 420, width: "100%", maxHeight: "90vh", overflowY: "auto", overflowX: "hidden" })
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ flex: 1, fontSize: 14, fontWeight: 700, color: C.accent }}>
+                {editId ? "タスクを編集" : "新しいタスク"}
+              </div>
+              <button onClick={() => { setShowForm(false); setEditId(null); }}
+                style={{ ...btn(false, C.textMid, { padding: "4px 10px", fontSize: 12 }) }}>✕</button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <input style={input()} placeholder="タスク名" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} />
+              <div>
+                <div style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>種類</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => setForm(f => ({ ...f, kind: "study" }))}
+                    style={{ ...btn(form.kind === "study", C.accent, { flex: 1, padding: "7px", fontSize: 12 }) }}>
+                    📚 勉強
+                  </button>
+                  <button onClick={() => setForm(f => ({ ...f, kind: "other" }))}
+                    style={{ ...btn(form.kind === "other", C.textMid, { flex: 1, padding: "7px", fontSize: 12 }) }}>
+                    📌 予定
+                  </button>
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>日付</div>
+                <input type="date" style={{
+                  ...input(),
+                  WebkitAppearance: "none",
+                  MozAppearance: "none",
+                  appearance: "none",
+                  minHeight: 36,
+                }} value={form.date}
+                  onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+                {!editId && (
+                  <>
+                    <button onClick={() => setShowBulk(b => !b)} style={{
+                      ...btn(showBulk, C.textMid, { marginTop: 8, padding: "5px 10px", fontSize: 11 }),
+                    }}>
+                      {showBulk ? "✕ 他の日を閉じる" : `+ 他の日にも追加${extraDates.length ? ` (${extraDates.length})` : ""}`}
+                    </button>
+                    {showBulk && (() => {
+                      // Show next 42 days from form.date (6 weeks calendar, Monday start)
+                      const fmtLocal = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+                      const [yy, mm, dd] = form.date.split("-").map(Number);
+                      const baseDate = new Date(yy, mm - 1, dd);
+                      const startDate = new Date(baseDate);
+                      startDate.setDate(baseDate.getDate() - ((baseDate.getDay() + 6) % 7)); // Monday of that week
+                      const cells = Array.from({ length: 42 }, (_, i) => {
+                        const d = new Date(startDate);
+                        d.setDate(startDate.getDate() + i);
+                        return fmtLocal(d);
+                      });
+                      const WEEKDAYS_MON = ["月","火","水","木","金","土","日"];
+                      return (
+                        <div style={{ marginTop: 8, padding: 8, background: C.surfaceUp, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                          <div style={{ fontSize: 10, color: C.textMid, marginBottom: 6 }}>
+                            タップした日にも同じ予定を追加（選択中: {extraDates.length}日）
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3, marginBottom: 4 }}>
+                            {WEEKDAYS_MON.map(d => (
+                              <div key={d} style={{ fontSize: 10, color: C.textDim, textAlign: "center" }}>{d}</div>
+                            ))}
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3 }}>
+                            {cells.map(d => {
+                              const dayNum = +d.split("-")[2];
+                              const isBase = d === form.date;
+                              const isExtra = extraDates.includes(d);
+                              const isPast = d < todayStr();
+                              return (
+                                <button key={d} onClick={() => {
+                                  if (isBase) return;
+                                  setExtraDates(arr => arr.includes(d) ? arr.filter(x => x !== d) : [...arr, d]);
+                                }} disabled={isBase} style={{
+                                  height: 30, borderRadius: 5,
+                                  background: isBase ? C.accent : isExtra ? C.accent + "40" : "transparent",
+                                  border: `1px solid ${isBase ? C.accent : isExtra ? C.accent : C.border}`,
+                                  color: isBase ? "#fff" : isPast ? C.textDim : C.text,
+                                  fontSize: 11, fontWeight: isBase || isExtra ? 700 : 400,
+                                  cursor: isBase ? "default" : "pointer", fontFamily: font, padding: 0,
+                                }}>{dayNum}</button>
+                              );
+                            })}
+                          </div>
+                          {extraDates.length > 0 && (
+                            <button onClick={() => setExtraDates([])} style={{
+                              ...btn(false, C.red, { marginTop: 8, padding: "4px 10px", fontSize: 11, width: "100%" }),
+                            }}>選択をクリア</button>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>開始時間</div>
+                  <select style={input()} value={form.hour} onChange={e => setForm(f => ({ ...f, hour: +e.target.value }))}>
+                    {Array.from({ length: 60 }, (_, i) => i * 0.5).map(h => {
+                      const hh = Math.floor(h);
+                      const mm = h % 1 === 0.5 ? "30" : "00";
+                      return <option key={h} value={h}>{fmt2(hh)}:{mm}</option>;
+                    })}
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>
+                    {form.kind === "other" ? "終了時刻" : "時間数"}
+                  </div>
+                  {form.kind === "other" ? (
+                    <select style={input()}
+                      value={form.hour + form.duration}
+                      onChange={e => setForm(f => ({ ...f, duration: Math.max(0.5, +e.target.value - f.hour) }))}>
+                      {Array.from({ length: 60 }, (_, i) => 0.5 + i * 0.5)
+                        .filter(h => h > form.hour)
+                        .map(h => {
+                          const hh = Math.floor(h);
+                          const mm = h % 1 === 0.5 ? "30" : "00";
+                          return <option key={h} value={h}>{fmt2(hh)}:{mm}</option>;
+                        })}
+                    </select>
+                  ) : (
+                    <select style={input()} value={form.duration} onChange={e => setForm(f => ({ ...f, duration: +e.target.value }))}>
+                      {[0.5,1,1.5,2,2.5,3,4].map(d => <option key={d} value={d}>{d}時間</option>)}
+                    </select>
+                  )}
+                </div>
+              </div>
+              {form.kind !== "other" && (
+                <div>
+                  <div style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>優先度</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {["high","medium","low"].map(p => (
+                      <button key={p} onClick={() => setForm(f => ({ ...f, priority: p }))}
+                        style={{ ...btn(form.priority === p, priorityColor[p], { flex: 1, padding: "6px" }) }}>
+                        {priorityLabel[p]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div>
+                <div style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>ゴールに紐づける（任意）</div>
+                <select style={input()} value={form.goalId} onChange={e => setForm(f => ({ ...f, goalId: e.target.value }))}>
+                  <option value="">なし</option>
+                  {goals.map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
+                </select>
+              </div>
+              <input style={input()} placeholder="メモ(任意)" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
+              <button onClick={saveTask} style={{ ...btn(true, C.accent, { padding: "9px", fontSize: 14 }) }}>
+                {editId ? "保存" : extraDates.length ? `${extraDates.length + 1}件まとめて追加` : "追加"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Understanding modal on complete */}
+      {understandingModal && (() => {
+        const t = understandingModal;
+        const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
+        const LEVELS = [
+          { lv: 4, mark: "◎", label: "万全", desc: "復習不要", color: C.green },
+          { lv: 3, mark: "○", label: "一応", desc: "1週間後に復習", color: C.blue },
+          { lv: 2, mark: "△", label: "あやふや", desc: "3日後に復習", color: C.yellow },
+          { lv: 1, mark: "✕", label: "わからない", desc: "明日復習", color: C.red },
+        ];
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+          }} onClick={() => setUnderstandingModal(null)}>
+            <div style={{
+              ...card({ maxWidth: 380, width: "100%" })
+            }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 4 }}>理解度を記録</div>
+              <div style={{ fontSize: 14, color: C.text, marginBottom: 4 }}>{t.title}</div>
+              {subjData && <div style={{ fontSize: 11, color: subjData.color, marginBottom: 14 }}>📚 {subjData.name}</div>}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {LEVELS.map(L => (
+                  <button key={L.lv} onClick={() => completeWithUnderstanding(t, L.lv)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 12,
+                      padding: "10px 14px", borderRadius: 8,
+                      background: C.surfaceUp, border: `1px solid ${L.color}40`,
+                      cursor: "pointer", fontFamily: font, textAlign: "left",
+                    }}>
+                    <div style={{
+                      width: 32, height: 32, borderRadius: "50%", background: L.color,
+                      color: "#fff", fontWeight: 700, fontSize: 14,
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                    }}>{L.mark}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{L.label}</div>
+                      <div style={{ fontSize: 11, color: C.textMid }}>{L.desc}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => setUnderstandingModal(null)}
+                style={{ ...btn(false, C.textMid, { width: "100%", marginTop: 12, padding: "8px" }) }}>
+                キャンセル
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+      {/* Schedule modal for unscheduled tasks */}
+      {scheduleModal && (() => {
+        const t = scheduleModal;
+        const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
+        // Find empty slots
+        const isFree = (h, dur) => !dayTasks.some(x => x.hour < h + dur && x.hour + x.duration > h);
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+          }} onClick={() => setScheduleModal(null)}>
+            <div style={{
+              ...card({ maxWidth: 380, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column" })
+            }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 4 }}>時間を選ぶ</div>
+              <div style={{ fontSize: 14, color: C.text, marginBottom: 2 }}>
+                {t.isReview && <span style={{ color: C.yellow, marginRight: 4 }}>🔁</span>}{t.title}
+              </div>
+              <div style={{ fontSize: 11, color: C.textMid, marginBottom: 12 }}>
+                {t.duration}時間
+                {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
+              </div>
+              <div style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+                {Array.from({ length: (endH - startH) * 2 }, (_, i) => startH + i * 0.5).map(h => {
+                  const free = isFree(h, t.duration);
+                  return (
+                    <button key={h} disabled={!free}
+                      onClick={() => {
+                        setTasks(ts => ts.map(x => x.id === t.id ? { ...x, hour: h } : x));
+                        setScheduleModal(null);
+                      }}
+                      style={{
+                        padding: "8px 4px", borderRadius: 6,
+                        background: free ? C.surfaceUp : "#f3e6e6",
+                        border: `1px solid ${free ? C.border : C.red + "40"}`,
+                        color: free ? C.text : C.textDim,
+                        fontFamily: font, fontSize: 12, fontWeight: 600,
+                        cursor: free ? "pointer" : "not-allowed",
+                      }}>
+                      {fmtTime(h)}
+                    </button>
+                  );
+                })}
+              </div>
+              <button onClick={() => setScheduleModal(null)}
+                style={{ ...btn(false, C.textMid, { width: "100%", marginTop: 12, padding: "8px" }) }}>
+                キャンセル
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   REVIEW VIEW (振り返り)
+══════════════════════════════════════════════════════ */
+function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, subjects, subjectTodos, settings, goals }) {
+  const [reviewType, setReviewType] = useState("day"); // day | week | month
+  const [memo, setMemo] = useState("");
+  const [mood, setMood] = useState(null);
+  const [tomorrowTheme, setTomorrowTheme] = useState("");
+
+  const dayTasks = tasks.filter(t => t.date === selectedDate).sort((a, b) => (a.hour ?? 99) - (b.hour ?? 99));
+  const done = dayTasks.filter(t => t.done);
+  const notDone = dayTasks.filter(t => !t.done);
+  const rate = dayTasks.length ? Math.round((done.length / dayTasks.length) * 100) : 0;
+
+  const tomorrow = addDays(selectedDate, 1);
+
+  const [carriedIds, setCarriedIds] = useState([]);
+  const carryOver = (taskId) => {
+    const t = tasks.find(x => x.id === taskId);
+    if (!t) return;
+    setTasks(ts => [...ts, { ...t, id: genId(), date: tomorrow, hour: null, done: false, actual: null }]);
+    setCarriedIds(ids => [...ids, taskId]);
+  };
+
+  const moods = ["😫","😕","😐","🙂","😄"];
+
+  return (
+    <div style={{ padding: 16, maxWidth: 560, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* Review type tabs */}
+      <div style={{ display: "flex", gap: 6 }}>
+        {[
+          ["day", "📅 日次"],
+          ["week", "📆 週次"],
+          ["month", "🗓 月次・予測"],
+        ].map(([k, l]) => (
+          <button key={k} onClick={() => setReviewType(k)}
+            style={{ ...btn(reviewType === k, C.accent, { flex: 1, fontSize: 12, padding: "7px 4px" }) }}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {reviewType === "day" && <>
+      {/* Date selector */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button onClick={() => setSelectedDate(addDays(selectedDate, -1))} style={{ ...btn(), padding: "5px 10px" }}>‹</button>
+        <div style={{ flex: 1, textAlign: "center", fontFamily: serif, fontSize: 17, color: C.text, cursor: "pointer", position: "relative" }}
+          onClick={() => document.getElementById("date-jump-review")?.showPicker?.()}>
+          {new Date(selectedDate + "T00:00:00").toLocaleDateString("ja-JP", { month: "long", day: "numeric" })} の振り返り
+          <input id="date-jump-review" type="date" value={selectedDate}
+            onChange={e => e.target.value && setSelectedDate(e.target.value)}
+            style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", border: "none" }} />
+        </div>
+        <button onClick={() => setSelectedDate(addDays(selectedDate, 1))} style={{ ...btn(), padding: "5px 10px" }}>›</button>
+        <button onClick={() => setSelectedDate(todayStr())} style={{ ...btn(false, C.accent, { fontSize: 11, padding: "5px 9px" }) }}>今日</button>
+      </div>
+
+      {/* Stats */}
+      <div style={{ ...card(), display: "flex", gap: 16 }}>
+        <div style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ fontFamily: serif, fontSize: 32, color: rate >= 70 ? C.green : rate >= 40 ? C.yellow : C.red }}>
+            {rate}%
+          </div>
+          <div style={{ fontSize: 11, color: C.textMid }}>達成率</div>
+        </div>
+        <div style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ fontFamily: serif, fontSize: 32, color: C.accent }}>{done.length}</div>
+          <div style={{ fontSize: 11, color: C.textMid }}>完了タスク</div>
+        </div>
+        <div style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ fontFamily: serif, fontSize: 32, color: C.textMid }}>{notDone.length}</div>
+          <div style={{ fontSize: 11, color: C.textMid }}>未完了</div>
+        </div>
+      </div>
+
+      {/* Done tasks */}
+      {done.length > 0 && (
+        <div style={card()}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.green, marginBottom: 8, letterSpacing: 1 }}>✓ 完了</div>
+          {done.map(t => (
+            <div key={t.id} style={{ padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 13, color: C.textMid, display: "flex", gap: 8 }}>
+              <span style={{ color: C.green }}>✓</span> {t.title}
+              <span style={{ marginLeft: "auto", fontSize: 11, color: C.textDim }}>{fmtTime(t.hour)}〜{fmtTime(t.hour + t.duration)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Not done tasks with carryover */}
+      {notDone.length > 0 && (
+        <div style={card()}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 8, letterSpacing: 1 }}>○ 未完了</div>
+          {notDone.map(t => (
+            <div key={t.id} style={{ padding: "7px 0", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 13, color: C.text, flex: 1 }}>{t.title}</span>
+              {carriedIds.includes(t.id) ? (
+                <span style={{ fontSize: 11, color: C.green, fontWeight: 700, padding: "3px 9px" }}>✓ 繰越済</span>
+              ) : (
+                <button onClick={() => carryOver(t.id)} style={{ ...btn(false, C.accent, { fontSize: 11, padding: "3px 9px" }) }}>
+                  翌日に繰越 →
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Mood */}
+      <div style={card()}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 10 }}>今日の気分</div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+          {moods.map((m, i) => (
+            <button key={i} onClick={() => setMood(i)}
+              style={{ fontSize: 26, background: "none", border: `2px solid ${mood === i ? C.accent : "transparent"}`, borderRadius: 10, cursor: "pointer", padding: "4px 8px", opacity: mood !== null && mood !== i ? 0.4 : 1 }}>
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Memo */}
+      <div style={card()}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 8 }}>一言メモ</div>
+        <textarea style={{ ...input(), minHeight: 70, resize: "vertical", lineHeight: 1.6 }}
+          placeholder="今日の気づきや反省を記録…"
+          value={memo} onChange={e => setMemo(e.target.value)} />
+      </div>
+
+      {/* Tomorrow theme */}
+      <div style={card()}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.accent, marginBottom: 8 }}>明日の集中テーマ</div>
+        <input style={input()} placeholder="例：Webアプリの設計を固める"
+          value={tomorrowTheme} onChange={e => setTomorrowTheme(e.target.value)} />
+        <button onClick={() => { setSelectedDate(tomorrow); setView("day"); }} style={{ ...btn(true, C.accent, { width: "100%", marginTop: 10, padding: "9px" }) }}>
+          明日の計画を立てる →
+        </button>
+      </div>
+      </>}
+
+      {reviewType === "week" && (() => {
+        const weekDates = getWeekDates(selectedDate);
+        const weekTasks = tasks.filter(t => weekDates.includes(t.date));
+        const weekDone = weekTasks.filter(t => t.done);
+        const weekStudy = weekDone.filter(t => t.kind !== "other");
+        const weekRate = weekTasks.length ? Math.round(weekDone.length / weekTasks.length * 100) : 0;
+        const totalHours = weekStudy.reduce((s, t) => s + (t.duration || 0), 0);
+        // By subject
+        const bySubject = {};
+        weekStudy.forEach(t => {
+          if (!t.subjectId) return;
+          bySubject[t.subjectId] = (bySubject[t.subjectId] || 0) + (t.duration || 0);
+        });
+        // Daily breakdown
+        const dailyHours = weekDates.map(d => {
+          const dayDone = tasks.filter(t => t.date === d && t.done && t.kind !== "other");
+          return dayDone.reduce((s, t) => s + (t.duration || 0), 0);
+        });
+        const maxDaily = Math.max(...dailyHours, 1);
+        return (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button onClick={() => setSelectedDate(addDays(selectedDate, -7))} style={{ ...btn(), padding: "5px 10px" }}>‹</button>
+              <div style={{ flex: 1, textAlign: "center", fontFamily: serif, fontSize: 15, color: C.text }}>
+                {weekDates[0].slice(5).replace("-", "/")} 〜 {weekDates[6].slice(5).replace("-", "/")}
+              </div>
+              <button onClick={() => setSelectedDate(addDays(selectedDate, 7))} style={{ ...btn(), padding: "5px 10px" }}>›</button>
+              <button onClick={() => setSelectedDate(todayStr())} style={{ ...btn(false, C.accent, { fontSize: 11, padding: "5px 9px" }) }}>今週</button>
+            </div>
+            <div style={{ ...card(), display: "flex", gap: 16 }}>
+              <div style={{ flex: 1, textAlign: "center" }}>
+                <div style={{ fontFamily: serif, fontSize: 28, color: weekRate >= 70 ? C.green : weekRate >= 40 ? C.yellow : C.red }}>{weekRate}%</div>
+                <div style={{ fontSize: 10, color: C.textMid }}>達成率</div>
+              </div>
+              <div style={{ flex: 1, textAlign: "center" }}>
+                <div style={{ fontFamily: serif, fontSize: 28, color: C.accent }}>{totalHours.toFixed(1)}h</div>
+                <div style={{ fontSize: 10, color: C.textMid }}>勉強時間</div>
+              </div>
+              <div style={{ flex: 1, textAlign: "center" }}>
+                <div style={{ fontFamily: serif, fontSize: 28, color: C.text }}>{weekDone.length}</div>
+                <div style={{ fontSize: 10, color: C.textMid }}>完了タスク</div>
+              </div>
+            </div>
+            {/* Daily bar chart */}
+            <div style={card()}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 10 }}>日別の勉強時間</div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 100 }}>
+                {weekDates.map((d, i) => (
+                  <div key={d} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                    <div style={{ flex: 1, width: "100%", display: "flex", alignItems: "flex-end" }}>
+                      <div style={{
+                        width: "100%", borderRadius: 4,
+                        background: dailyHours[i] > 0 ? C.accent : C.border,
+                        height: `${(dailyHours[i] / maxDaily) * 100}%`,
+                        minHeight: dailyHours[i] > 0 ? 4 : 1,
+                      }} />
+                    </div>
+                    <div style={{ fontSize: 9, color: C.textDim }}>{DAYS_JA[new Date(d + "T00:00:00").getDay()]}</div>
+                    <div style={{ fontSize: 9, color: C.textMid }}>{dailyHours[i] > 0 ? dailyHours[i].toFixed(1) : "-"}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* By subject */}
+            {Object.keys(bySubject).length > 0 && (
+              <div style={card()}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 10 }}>科目別の勉強時間</div>
+                {subjects.filter(s => bySubject[s.id]).sort((a, b) => bySubject[b.id] - bySubject[a.id]).map(s => {
+                  const h = bySubject[s.id];
+                  const pct = (h / totalHours) * 100;
+                  return (
+                    <div key={s.id} style={{ marginBottom: 8 }}>
+                      <div style={{ display: "flex", fontSize: 12, color: C.text, marginBottom: 2 }}>
+                        <span style={{ flex: 1 }}>{s.name}</span>
+                        <span style={{ color: s.color, fontWeight: 700 }}>{h.toFixed(1)}h</span>
+                      </div>
+                      <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ width: `${pct}%`, height: "100%", background: s.color }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        );
+      })()}
+
+      {reviewType === "month" && (() => {
+        // Month tasks
+        const monthKey = selectedDate.slice(0, 7);
+        const monthTasks = tasks.filter(t => t.date.startsWith(monthKey));
+        const monthDone = monthTasks.filter(t => t.done);
+        const monthStudy = monthDone.filter(t => t.kind !== "other");
+        const monthRate = monthTasks.length ? Math.round(monthDone.length / monthTasks.length * 100) : 0;
+        const monthHours = monthStudy.reduce((s, t) => s + (t.duration || 0), 0);
+
+        // Subject progress / goal forecast
+        const subjectStats = subjects.map(s => {
+          const todos = subjectTodos.filter(t => t.subjectId === s.id);
+          const totalMin = todos.reduce((sum, t) => sum + (t.minutes || 0), 0);
+          const watchedTodos = todos.filter(t => {
+            const st = t.status || (t.done ? "done" : "unwatched");
+            return st === "done" || st === "reviewing";
+          });
+          const watchedMin = watchedTodos.reduce((sum, t) => sum + (t.minutes || 0), 0);
+          const remainMin = Math.max(0, totalMin - watchedMin);
+          return { subject: s, totalMin, watchedMin, remainMin, totalCount: todos.length, watchedCount: watchedTodos.length };
+        }).filter(x => x.totalMin > 0);
+
+        // Forecast based on examDate
+        const allRemainMin = subjectStats.reduce((s, x) => s + x.remainMin, 0);
+        const examDate = settings?.examDate;
+        let forecast = null;
+        if (examDate) {
+          const [yy, mm, dd] = examDate.split("-").map(Number);
+          const exam = new Date(yy, mm - 1, dd);
+          const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+          const daysLeft = Math.max(1, Math.ceil((exam - today0) / 86400000));
+          // Compute recent pace: last 14 days study minutes
+          const last14 = Array.from({ length: 14 }, (_, i) => addDays(todayStr(), -i));
+          const recent = tasks.filter(t => last14.includes(t.date) && t.done && t.kind !== "other");
+          const recentMin = recent.reduce((s, t) => s + (t.duration || 0) * 60, 0);
+          const dailyPaceMin = recentMin / 14;
+          const requiredDailyMin = allRemainMin / daysLeft;
+          const willFinish = dailyPaceMin >= requiredDailyMin;
+          forecast = { daysLeft, dailyPaceMin, requiredDailyMin, willFinish, allRemainMin };
+        }
+
+        return (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button onClick={() => {
+                const [yy, mm] = selectedDate.split("-").map(Number);
+                const d = new Date(yy, mm - 2, 1);
+                setSelectedDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-01`);
+              }} style={{ ...btn(), padding: "5px 10px" }}>‹</button>
+              <div style={{ flex: 1, textAlign: "center", fontFamily: serif, fontSize: 16, color: C.text }}>
+                {monthKey.replace("-", "年")}月
+              </div>
+              <button onClick={() => {
+                const [yy, mm] = selectedDate.split("-").map(Number);
+                const d = new Date(yy, mm, 1);
+                setSelectedDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-01`);
+              }} style={{ ...btn(), padding: "5px 10px" }}>›</button>
+              <button onClick={() => setSelectedDate(todayStr())} style={{ ...btn(false, C.accent, { fontSize: 11, padding: "5px 9px" }) }}>今月</button>
+            </div>
+            <div style={{ ...card(), display: "flex", gap: 16 }}>
+              <div style={{ flex: 1, textAlign: "center" }}>
+                <div style={{ fontFamily: serif, fontSize: 28, color: monthRate >= 70 ? C.green : monthRate >= 40 ? C.yellow : C.red }}>{monthRate}%</div>
+                <div style={{ fontSize: 10, color: C.textMid }}>達成率</div>
+              </div>
+              <div style={{ flex: 1, textAlign: "center" }}>
+                <div style={{ fontFamily: serif, fontSize: 28, color: C.accent }}>{monthHours.toFixed(0)}h</div>
+                <div style={{ fontSize: 10, color: C.textMid }}>勉強時間</div>
+              </div>
+              <div style={{ flex: 1, textAlign: "center" }}>
+                <div style={{ fontFamily: serif, fontSize: 28, color: C.text }}>{monthDone.length}</div>
+                <div style={{ fontSize: 10, color: C.textMid }}>完了タスク</div>
+              </div>
+            </div>
+
+            {/* Forecast */}
+            {forecast && (
+              <div style={{ ...card(), borderLeft: `4px solid ${forecast.willFinish ? C.green : C.red}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 8 }}>
+                  🎯 {settings.examLabel || "試験"}まで {forecast.daysLeft}日 — 達成予測
+                </div>
+                <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 10, color: C.textMid }}>直近14日の平均</div>
+                    <div style={{ fontSize: 18, fontFamily: serif, color: C.text }}>
+                      {(forecast.dailyPaceMin / 60).toFixed(1)}h<span style={{ fontSize: 10, color: C.textMid }}>/日</span>
+                    </div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 10, color: C.textMid }}>必要ペース</div>
+                    <div style={{ fontSize: 18, fontFamily: serif, color: forecast.willFinish ? C.green : C.red }}>
+                      {(forecast.requiredDailyMin / 60).toFixed(1)}h<span style={{ fontSize: 10, color: C.textMid }}>/日</span>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: forecast.willFinish ? C.green : C.red, fontWeight: 700 }}>
+                  {forecast.willFinish
+                    ? `✓ このペースなら間に合う見込み（残り${(forecast.allRemainMin/60).toFixed(0)}h）`
+                    : `⚠ ペース不足（残り${(forecast.allRemainMin/60).toFixed(0)}h / 不足${((forecast.requiredDailyMin - forecast.dailyPaceMin)/60).toFixed(1)}h/日）`}
+                </div>
+              </div>
+            )}
+
+            {/* Subject progress */}
+            {subjectStats.length > 0 && (
+              <div style={card()}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 10 }}>科目別の視聴進捗</div>
+                {subjectStats.map(x => {
+                  const pct = x.totalMin ? (x.watchedMin / x.totalMin) * 100 : 0;
+                  return (
+                    <div key={x.subject.id} style={{ marginBottom: 10 }}>
+                      <div style={{ display: "flex", fontSize: 12, color: C.text, marginBottom: 3 }}>
+                        <span style={{ flex: 1 }}>{x.subject.name}</span>
+                        <span style={{ color: x.subject.color, fontWeight: 700 }}>{Math.round(pct)}%</span>
+                      </div>
+                      <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ width: `${pct}%`, height: "100%", background: x.subject.color }} />
+                      </div>
+                      <div style={{ fontSize: 10, color: C.textMid, marginTop: 2 }}>
+                        {(x.watchedMin/60).toFixed(1)}h 視聴済 / 残 {(x.remainMin/60).toFixed(1)}h
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        );
+      })()}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   SUBJECTS VIEW (科目別TODO)
+══════════════════════════════════════════════════════ */
+function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeeklyPlans, tasks, setTasks, selectedDate, goals }) {
+  const [activeSubject, setActiveSubject] = useState(subjects[0]?.id || null);
+  const [showSubjectForm, setShowSubjectForm] = useState(false);
+  const [newSubject, setNewSubject] = useState({ name: "", color: C.blue });
+  const [newTodo, setNewTodo] = useState("");
+  const [newTodoMinutes, setNewTodoMinutes] = useState("");
+  const [editTodoId, setEditTodoId] = useState(null);
+  const [editTodoText, setEditTodoText] = useState("");
+  const [editTodoMinutes, setEditTodoMinutes] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [filter, setFilter] = useState("all"); // all | active | done
+  const [monthPickerTodo, setMonthPickerTodo] = useState(null);
+  const [editSubjectId, setEditSubjectId] = useState(null);
+  const [editSubjectName, setEditSubjectName] = useState("");
+  const [editSubjectColor, setEditSubjectColor] = useState("");
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedTodos, setSelectedTodos] = useState([]);
+  const [bulkMonthPicker, setBulkMonthPicker] = useState(false);
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const [tplOpen, setTplOpen] = useState(false);
+  const [tpl, setTpl] = useState({ prefix: "TX", chapters: [{ chapter: 1, sections: 10 }], suffix: "", minutes: 60 });
+
+  const COLORS = [C.blue, C.green, C.accent, C.purple, C.red, C.yellow];
+
+  useEffect(() => {
+    if (!activeSubject && subjects.length > 0) setActiveSubject(subjects[0].id);
+  }, [subjects, activeSubject]);
+
+  const addSubject = () => {
+    if (!newSubject.name.trim()) return;
+    const id = genId();
+    setSubjects(ss => [...ss, { id, ...newSubject }]);
+    setActiveSubject(id);
+    setNewSubject({ name: "", color: C.blue });
+    setShowSubjectForm(false);
+  };
+
+  const deleteSubject = (id) => {
+    setSubjects(ss => ss.filter(s => s.id !== id));
+    setSubjectTodos(ts => ts.filter(t => t.subjectId !== id));
+    if (activeSubject === id) setActiveSubject(null);
+    setConfirmDelete(null);
+  };
+
+  const addTodo = () => {
+    if (!newTodo.trim() || !activeSubject) return;
+    setSubjectTodos(ts => [...ts, {
+      id: genId(), subjectId: activeSubject,
+      text: newTodo, minutes: newTodoMinutes ? +newTodoMinutes : null,
+      status: "unwatched", done: false, createdAt: Date.now()
+    }]);
+    setNewTodo("");
+    setNewTodoMinutes("");
+  };
+
+  // Parse a line like "TX1-1 損益計算書 60" -> {text, minutes}
+  const parseLine = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+    // Try to find trailing number (minutes)
+    const m = trimmed.match(/^(.+?)\s+(\d+)\s*$/);
+    if (m) return { text: m[1].trim(), minutes: +m[2] };
+    return { text: trimmed, minutes: null };
+  };
+
+  const bulkAddTodos = () => {
+    if (!activeSubject) return;
+    const lines = bulkText.split("\n").map(parseLine).filter(Boolean);
+    if (!lines.length) return;
+    const now = Date.now();
+    setSubjectTodos(ts => [...ts, ...lines.map((l, i) => ({
+      id: genId(), subjectId: activeSubject,
+      text: l.text, minutes: l.minutes,
+      status: "unwatched", done: false, createdAt: now + i,
+    }))]);
+    setBulkText("");
+    setBulkAddOpen(false);
+  };
+
+  const templateAddTodos = () => {
+    if (!activeSubject) return;
+    const items = [];
+    const now = Date.now();
+    let i = 0;
+    tpl.chapters.forEach(({ chapter, sections }) => {
+      for (let s = 1; s <= sections; s++) {
+        items.push({
+          id: genId(), subjectId: activeSubject,
+          text: `${tpl.prefix}${chapter}-${s}${tpl.suffix ? " " + tpl.suffix : ""}`,
+          minutes: tpl.minutes || null,
+          status: "unwatched", done: false, createdAt: now + (i++),
+        });
+      }
+    });
+    if (items.length) setSubjectTodos(ts => [...ts, ...items]);
+    setTplOpen(false);
+  };
+
+  const setStatus = (id, status) => {
+    setSubjectTodos(ts => ts.map(t => t.id === id ? { ...t, status, done: status === "done" } : t));
+  };
+
+  const REVIEW_DAYS = { 1: 1, 2: 3, 3: 7, 4: null };
+  const setUnderstanding = (id, level) => {
+    const todo = subjectTodos.find(t => t.id === id);
+    setSubjectTodos(ts => ts.map(t => t.id === id ? { ...t, understanding: level } : t));
+    // Schedule review if not perfect and we have a value
+    const days = level && REVIEW_DAYS[level];
+    if (days && todo) {
+      const reviewDate = addDays(todayStr(), days);
+      // Check if review task already exists for this todo on/after today
+      const existingReview = tasks.find(t => t.subjectTodoId === id && t.isReview && t.date >= todayStr() && !t.done);
+      if (existingReview) {
+        // Update existing review date
+        setTasks(ts => ts.map(t => t.id === existingReview.id ? { ...t, date: reviewDate } : t));
+      } else {
+        const reviewTitle = todo.text.startsWith("復習: ") ? todo.text : `復習: ${todo.text}`;
+        setTasks(ts => [...ts, {
+          id: genId(), date: reviewDate, title: reviewTitle,
+          hour: null, duration: 1,
+          priority: level === 1 ? "high" : level === 2 ? "medium" : "low",
+          actual: null, done: false, note: "", goalId: null,
+          kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
+          isReview: true,
+        }]);
+      }
+    }
+  };
+
+  // Current month key (YYYY-MM)
+  const currentMonth = todayStr().slice(0, 7);
+  // Current week dates
+  const currentWeekDates = getWeekDates(selectedDate);
+
+  // Check if todo is already in monthly/weekly/today plan
+  const inMonthly = (todoId) => monthlyPlans.some(p => p.month === currentMonth && p.todoId === todoId);
+  const inAnyMonthly = (todoId) => monthlyPlans.some(p => p.todoId === todoId);
+  const monthsOf = (todoId) => monthlyPlans.filter(p => p.todoId === todoId).map(p => p.month).sort();
+  const inWeekly = (todoId) => weeklyPlans.some(p => currentWeekDates.includes(p.weekStart) && p.todoId === todoId);
+  const inToday = (todoId) => tasks.some(t => t.date === selectedDate && t.subjectTodoId === todoId);
+
+  const sendToMonthly = (todo, monthKey = currentMonth) => {
+    if (monthlyPlans.some(p => p.month === monthKey && p.todoId === todo.id)) return;
+    setMonthlyPlans(ps => [...ps, {
+      id: genId(), month: monthKey, todoId: todo.id,
+      subjectId: todo.subjectId, createdAt: Date.now(),
+    }]);
+  };
+
+  const sendToWeekly = (todo) => {
+    if (inWeekly(todo.id)) return;
+    setWeeklyPlans(ps => [...ps, {
+      id: genId(), weekStart: currentWeekDates[0], todoId: todo.id,
+      subjectId: todo.subjectId, createdAt: Date.now(),
+    }]);
+    // Also add to monthly if not yet
+    if (!inMonthly(todo.id)) sendToMonthly(todo);
+  };
+
+  const sendToToday = (todo) => {
+    if (inToday(todo.id)) return;
+    const dur = todo.minutes ? Math.max(0.5, Math.round(todo.minutes / 60 * 2) / 2) : 1;
+    setTasks(ts => [...ts, {
+      id: genId(), date: selectedDate, title: todo.text,
+      hour: null, duration: dur, priority: "medium",
+      actual: null, done: false, note: "",
+      goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
+    }]);
+    if (!inWeekly(todo.id)) sendToWeekly(todo);
+  };
+
+  const deleteTodo = (id) => {
+    setSubjectTodos(ts => ts.filter(t => t.id !== id));
+  };
+
+  const saveEdit = () => {
+    if (!editTodoText.trim()) return;
+    setSubjectTodos(ts => ts.map(t => t.id === editTodoId
+      ? { ...t, text: editTodoText, minutes: editTodoMinutes ? +editTodoMinutes : null }
+      : t));
+    setEditTodoId(null);
+    setEditTodoText("");
+    setEditTodoMinutes("");
+  };
+
+  const activeSubjectData = subjects.find(s => s.id === activeSubject);
+  const STATUS_ORDER = { unwatched: 0, reviewing: 1, done: 2 };
+  const todos = subjectTodos.filter(t => t.subjectId === activeSubject)
+    .filter(t => {
+      const st = t.status || (t.done ? "done" : "unwatched");
+      if (filter === "all") return true;
+      if (filter === "unwatched") return st === "unwatched";
+      if (filter === "reviewing") return st === "reviewing";
+      return st === "done";
+    })
+    .sort((a, b) => a.createdAt - b.createdAt);
+  const totalTodos = subjectTodos.filter(t => t.subjectId === activeSubject);
+  const doneTodos = totalTodos.filter(t => (t.status || (t.done ? "done" : "unwatched")) === "done");
+  const reviewingTodos = totalTodos.filter(t => (t.status || (t.done ? "done" : "unwatched")) === "reviewing");
+  const unwatchedTodos = totalTodos.filter(t => (t.status || (t.done ? "done" : "unwatched")) === "unwatched");
+  const watchedTodos = totalTodos.filter(t => {
+    const s = t.status || (t.done ? "done" : "unwatched");
+    return s === "done" || s === "reviewing";
+  });
+  const totalMin = totalTodos.reduce((s, t) => s + (t.minutes || 0), 0);
+  const doneMin = watchedTodos.reduce((s, t) => s + (t.minutes || 0), 0);
+  const remainMin = totalMin - doneMin;
+  const fmtH = (m) => m >= 60 ? `${Math.floor(m/60)}h${m%60 ? (m%60)+"m" : ""}` : `${m}m`;
+
+  return (
+    <div style={{ padding: 16, maxWidth: 600, margin: "0 auto", display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ fontFamily: serif, fontSize: 18, color: C.text, textAlign: "center" }}>科目別TODO</div>
+
+      {/* Subject tabs */}
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
+        {subjects.map(s => (
+          <button key={s.id} onClick={() => setActiveSubject(s.id)}
+            style={{
+              padding: "8px 14px", borderRadius: 8,
+              background: activeSubject === s.id ? s.color : C.surface,
+              color: activeSubject === s.id ? "#fff" : C.text,
+              border: `1px solid ${activeSubject === s.id ? s.color : C.border}`,
+              fontSize: 13, fontFamily: font, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}>
+            {s.name}
+          </button>
+        ))}
+        <button onClick={() => setShowSubjectForm(!showSubjectForm)}
+          style={{
+            padding: "8px 12px", borderRadius: 8, background: "transparent",
+            color: C.accent, border: `1px dashed ${C.accent}`,
+            fontSize: 13, fontFamily: font, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+          }}>+ 科目</button>
+      </div>
+
+      {/* Add subject form */}
+      {showSubjectForm && (
+        <div style={card()}>
+          <input style={input({ marginBottom: 10 })} placeholder="科目名（例：財務会計）"
+            value={newSubject.name} onChange={e => setNewSubject(s => ({ ...s, name: e.target.value }))} />
+          <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>カラー</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            {COLORS.map(c => (
+              <button key={c} onClick={() => setNewSubject(s => ({ ...s, color: c }))}
+                style={{ width: 28, height: 28, borderRadius: "50%", background: c, border: `3px solid ${newSubject.color === c ? C.text : "transparent"}`, cursor: "pointer" }} />
+            ))}
+          </div>
+          <button onClick={addSubject} style={{ ...btn(true, C.accent, { width: "100%", padding: "9px" }) }}>追加</button>
+        </div>
+      )}
+
+      {/* Subject content */}
+      {activeSubjectData ? (
+        <>
+          {/* Subject header */}
+          <div style={{ ...card(), borderLeft: `4px solid ${activeSubjectData.color}`, display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {editSubjectId === activeSubjectData.id ? (
+                <>
+                  <input style={input({ marginBottom: 8 })} value={editSubjectName}
+                    onChange={e => setEditSubjectName(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" && editSubjectName.trim()) {
+                        setSubjects(ss => ss.map(s => s.id === editSubjectId ? { ...s, name: editSubjectName, color: editSubjectColor } : s));
+                        setEditSubjectId(null);
+                      }
+                      if (e.key === "Escape") setEditSubjectId(null);
+                    }}
+                    autoFocus />
+                  <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                    {COLORS.map(c => (
+                      <button key={c} onClick={() => setEditSubjectColor(c)}
+                        style={{ width: 24, height: 24, borderRadius: "50%", background: c, border: `3px solid ${editSubjectColor === c ? C.text : "transparent"}`, cursor: "pointer" }} />
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => {
+                      if (!editSubjectName.trim()) return;
+                      setSubjects(ss => ss.map(s => s.id === editSubjectId ? { ...s, name: editSubjectName, color: editSubjectColor } : s));
+                      setEditSubjectId(null);
+                    }} style={{ ...btn(true, C.green, { padding: "5px 12px", fontSize: 12 }) }}>保存</button>
+                    <button onClick={() => setEditSubjectId(null)}
+                      style={{ ...btn(false, C.textMid, { padding: "5px 12px", fontSize: 12 }) }}>キャンセル</button>
+                  </div>
+                </>
+              ) : (
+                <div onClick={() => {
+                  setEditSubjectId(activeSubjectData.id);
+                  setEditSubjectName(activeSubjectData.name);
+                  setEditSubjectColor(activeSubjectData.color);
+                }} style={{ cursor: "pointer" }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>
+                    {activeSubjectData.name}
+                    <span style={{ fontSize: 10, color: C.textDim, marginLeft: 6, fontWeight: 400 }}>✎</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: C.textMid, marginTop: 2 }}>
+                    {watchedTodos.length} / {totalTodos.length} 視聴済
+                    {totalTodos.length > 0 && (
+                      <span style={{ marginLeft: 6, color: activeSubjectData.color }}>
+                        ({Math.round((watchedTodos.length / totalTodos.length) * 100)}%)
+                      </span>
+                    )}
+                  </div>
+                  {totalMin > 0 && (
+                    <div style={{ fontSize: 11, color: C.textMid, marginTop: 4, display: "flex", gap: 10 }}>
+                      <span>残り <span style={{ color: activeSubjectData.color, fontWeight: 700 }}>{fmtH(remainMin)}</span></span>
+                      <span style={{ color: C.textDim }}>/ 全 {fmtH(totalMin)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            {editSubjectId !== activeSubjectData.id && (
+              <button onClick={() => {
+                if (confirmDelete === activeSubjectData.id) deleteSubject(activeSubjectData.id);
+                else {
+                  setConfirmDelete(activeSubjectData.id);
+                  setTimeout(() => setConfirmDelete(c => c === activeSubjectData.id ? null : c), 3000);
+                }
+              }} style={{ ...btn(confirmDelete === activeSubjectData.id, C.red, { fontSize: 11, padding: "4px 9px" }) }}>
+                {confirmDelete === activeSubjectData.id ? "削除？" : "科目削除"}
+              </button>
+            )}
+          </div>
+
+          {/* Add todo */}
+          <div style={{ display: "flex", gap: 6 }}>
+            <input style={input({ flex: 1 })} placeholder="やることを入力..."
+              value={newTodo} onChange={e => setNewTodo(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && addTodo()} />
+            <input style={input({ width: 60 })} type="number" placeholder="分" min="0"
+              value={newTodoMinutes} onChange={e => setNewTodoMinutes(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && addTodo()} />
+            <button onClick={addTodo} style={{ ...btn(true, activeSubjectData.color, { padding: "0 18px", fontSize: 16 }) }}>+</button>
+          </div>
+
+          {/* Bulk/Template add toggles */}
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => { setBulkAddOpen(b => !b); setTplOpen(false); }}
+              style={{ ...btn(bulkAddOpen, C.textMid, { flex: 1, fontSize: 11, padding: "5px" }) }}>
+              📝 まとめて追加
+            </button>
+            <button onClick={() => { setTplOpen(t => !t); setBulkAddOpen(false); }}
+              style={{ ...btn(tplOpen, C.textMid, { flex: 1, fontSize: 11, padding: "5px" }) }}>
+              📐 連番で追加
+            </button>
+          </div>
+
+          {/* Bulk add form */}
+          {bulkAddOpen && (
+            <div style={{ ...card({ padding: 12, background: C.surfaceUp }) }}>
+              <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>
+                1行1TODO、末尾に半角スペース＋分数で時間も指定可能
+              </div>
+              <textarea style={{ ...input(), minHeight: 100, resize: "vertical", fontFamily: font }}
+                placeholder={"TX1-1 損益計算書 60\nTX1-2 現金及び預金 94\nTX1-3 手形 41"}
+                value={bulkText} onChange={e => setBulkText(e.target.value)} />
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <button onClick={bulkAddTodos} style={{ ...btn(true, activeSubjectData.color, { flex: 1, padding: "8px", fontSize: 12 }) }}>
+                  {bulkText.split("\n").filter(l => l.trim()).length}件追加
+                </button>
+                <button onClick={() => { setBulkText(""); setBulkAddOpen(false); }} style={{ ...btn(false, C.textMid, { padding: "8px 12px", fontSize: 12 }) }}>
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Template add form */}
+          {tplOpen && (() => {
+            const totalCount = tpl.chapters.reduce((s, c) => s + Math.max(0, c.sections), 0);
+            const firstC = tpl.chapters[0];
+            const lastC = tpl.chapters[tpl.chapters.length - 1];
+            return (
+              <div style={{ ...card({ padding: 12, background: C.surfaceUp }) }}>
+                <div style={{ fontSize: 11, color: C.textMid, marginBottom: 8 }}>
+                  プレビュー: <span style={{ color: activeSubjectData.color, fontWeight: 700 }}>
+                    {tpl.prefix}{firstC.chapter}-1 〜 {tpl.prefix}{lastC.chapter}-{lastC.sections}{tpl.suffix && " " + tpl.suffix}
+                  </span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
+                  <label style={{ fontSize: 10, color: C.textMid }}>
+                    接頭辞
+                    <input style={input()} value={tpl.prefix} onChange={e => setTpl(t => ({ ...t, prefix: e.target.value }))} />
+                  </label>
+                  <label style={{ fontSize: 10, color: C.textMid }}>
+                    各分数 (任意)
+                    <input style={input()} type="number" min="0" value={tpl.minutes} onChange={e => setTpl(t => ({ ...t, minutes: +e.target.value }))} />
+                  </label>
+                  <label style={{ fontSize: 10, color: C.textMid, gridColumn: "1 / -1" }}>
+                    説明 (任意)
+                    <input style={input()} placeholder="例: 概論" value={tpl.suffix} onChange={e => setTpl(t => ({ ...t, suffix: e.target.value }))} />
+                  </label>
+                </div>
+
+                <div style={{ fontSize: 10, color: C.textMid, marginBottom: 4 }}>章ごとの節数</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+                  {tpl.chapters.map((c, idx) => (
+                    <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input style={input({ width: 70 })} type="number" min="1" value={c.chapter}
+                        onChange={e => setTpl(t => ({
+                          ...t, chapters: t.chapters.map((x, i) => i === idx ? { ...x, chapter: +e.target.value } : x)
+                        }))} />
+                      <span style={{ fontSize: 11, color: C.textMid }}>章 ×</span>
+                      <input style={input({ flex: 1 })} type="number" min="1" value={c.sections}
+                        onChange={e => setTpl(t => ({
+                          ...t, chapters: t.chapters.map((x, i) => i === idx ? { ...x, sections: +e.target.value } : x)
+                        }))} />
+                      <span style={{ fontSize: 11, color: C.textMid }}>節</span>
+                      {tpl.chapters.length > 1 && (
+                        <button onClick={() => setTpl(t => ({ ...t, chapters: t.chapters.filter((_, i) => i !== idx) }))}
+                          style={{ ...btn(false, C.red, { padding: "4px 8px", fontSize: 10 }) }}>✕</button>
+                      )}
+                    </div>
+                  ))}
+                  <button onClick={() => setTpl(t => ({
+                    ...t, chapters: [...t.chapters, { chapter: (t.chapters[t.chapters.length-1]?.chapter || 0) + 1, sections: 10 }]
+                  }))} style={{ ...btn(false, C.blue, { padding: "5px", fontSize: 11 }) }}>
+                    + 章を追加
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={templateAddTodos} style={{ ...btn(true, activeSubjectData.color, { flex: 1, padding: "8px", fontSize: 12 }) }}>
+                    {totalCount}件追加
+                  </button>
+                  <button onClick={() => setTplOpen(false)} style={{ ...btn(false, C.textMid, { padding: "8px 12px", fontSize: 12 }) }}>
+                    キャンセル
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Filter */}
+          <div style={{ display: "flex", gap: 4, overflowX: "auto" }}>
+            {[
+              ["all","すべて", totalTodos.length],
+              ["unwatched","未着手", unwatchedTodos.length],
+              ["reviewing","復習中", reviewingTodos.length],
+              ["done","完了", doneTodos.length],
+            ].map(([k, l, n]) => (
+              <button key={k} onClick={() => setFilter(k)}
+                style={{ ...btn(filter === k, activeSubjectData.color, { flex: 1, fontSize: 11, padding: "6px 4px", whiteSpace: "nowrap" }) }}>
+                {l} {n}
+              </button>
+            ))}
+          </div>
+
+          {/* Selection mode toolbar */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <button onClick={() => { setSelectMode(s => !s); setSelectedTodos([]); }}
+              style={{ ...btn(selectMode, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
+              {selectMode ? "✕ 選択終了" : "☑ 複数選択"}
+            </button>
+            {selectMode && (
+              <>
+                <button onClick={() => setSelectedTodos(todos.map(t => t.id))}
+                  style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "5px 10px" }) }}>
+                  全選択
+                </button>
+                <div style={{ flex: 1, fontSize: 11, color: C.textMid, textAlign: "right" }}>
+                  {selectedTodos.length}件選択中
+                </div>
+                {selectedTodos.length > 0 && (
+                  <button onClick={() => setBulkMonthPicker(true)}
+                    style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
+                    📅 月に追加
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Todo list */}
+          <div style={{ ...card({ padding: 0 }) }}>
+            {todos.length === 0 ? (
+              <div style={{ padding: 30, textAlign: "center", color: C.textDim, fontSize: 13 }}>
+                該当するものはありません
+              </div>
+            ) : todos.map((t, idx) => {
+              const st = t.status || (t.done ? "done" : "unwatched");
+              const stInfo = {
+                unwatched: { label: "未視聴", bg: "transparent", color: C.textDim, border: C.border, mark: "" },
+                reviewing: { label: "復習中", bg: C.yellow, color: "#fff", border: C.yellow, mark: "◐" },
+                done:      { label: "完了",   bg: activeSubjectData.color, color: "#fff", border: activeSubjectData.color, mark: "✓" },
+              }[st];
+              const cycleStatus = () => {
+                const next = st === "unwatched" ? "reviewing" : st === "reviewing" ? "done" : "unwatched";
+                setStatus(t.id, next);
+              };
+              return (
+              <div key={t.id} style={{
+                padding: "12px 14px", display: "flex", alignItems: "center", gap: 10,
+                borderBottom: idx < todos.length - 1 ? `1px solid ${C.border}` : "none",
+                opacity: st === "done" ? 0.65 : 1,
+              }}>
+                {selectMode ? (
+                  <button onClick={() => setSelectedTodos(sel =>
+                    sel.includes(t.id) ? sel.filter(x => x !== t.id) : [...sel, t.id]
+                  )} style={{
+                    width: 24, height: 24, borderRadius: 5,
+                    border: `2px solid ${selectedTodos.includes(t.id) ? C.purple : C.border}`,
+                    background: selectedTodos.includes(t.id) ? C.purple : "transparent",
+                    cursor: "pointer", color: "#fff", fontSize: 13, fontWeight: 700,
+                    flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                    padding: 0,
+                  }}>{selectedTodos.includes(t.id) ? "✓" : ""}</button>
+                ) : (
+                  <button onClick={cycleStatus} style={{
+                    width: 24, height: 24, borderRadius: "50%",
+                    border: `2px solid ${stInfo.border}`,
+                    background: stInfo.bg,
+                    cursor: "pointer", color: stInfo.color, fontSize: 13, fontWeight: 700,
+                    flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                    padding: 0,
+                  }}>{stInfo.mark}</button>
+                )}
+
+                {editTodoId === t.id ? (
+                  <>
+                    <input style={{ ...input({ flex: 1 }) }} value={editTodoText}
+                      onChange={e => setEditTodoText(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && saveEdit()}
+                      autoFocus />
+                    <input style={{ ...input({ width: 55 }) }} type="number" placeholder="分" min="0"
+                      value={editTodoMinutes}
+                      onChange={e => setEditTodoMinutes(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && saveEdit()} />
+                    <button onClick={saveEdit} style={{ ...btn(true, C.green, { padding: "4px 9px", fontSize: 11 }) }}>保存</button>
+                  </>
+                ) : (
+                  <>
+                    <div onClick={() => { setEditTodoId(t.id); setEditTodoText(t.text); setEditTodoMinutes(t.minutes || ""); }} style={{
+                      flex: 1, minWidth: 0, cursor: "pointer",
+                    }}>
+                      <div style={{
+                        fontSize: 14, color: st === "done" ? C.textMid : C.text,
+                        textDecoration: st === "done" ? "line-through" : "none",
+                      }}>{t.text}</div>
+                      <div style={{ fontSize: 10, color: stInfo.bg === "transparent" ? C.textDim : stInfo.border, fontWeight: 600, marginTop: 2, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        <span>{stInfo.label}</span>
+                        {(st === "reviewing" || st === "done") && (() => {
+                          const U = {
+                            1: { label: "わからない", color: C.red },
+                            2: { label: "あやふや",   color: C.yellow },
+                            3: { label: "一応",       color: C.blue },
+                            4: { label: "万全",       color: C.green },
+                          }[t.understanding];
+                          if (!U) return null;
+                          return (
+                            <span style={{
+                              background: U.color + "20", color: U.color,
+                              padding: "1px 6px", borderRadius: 4, fontSize: 9,
+                            }}>{U.label}</span>
+                          );
+                        })()}
+                        {inMonthly(t.id) && <span style={{ color: C.purple }}>📅</span>}
+                        {inWeekly(t.id) && <span style={{ color: C.blue }}>📆</span>}
+                        {inToday(t.id) && <span style={{ color: C.accent }}>🌅</span>}
+                      </div>
+                      {(st === "reviewing" || st === "done") && (
+                        <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 3, marginTop: 4 }}>
+                          {[
+                            [1, "✕", C.red, "わからない"],
+                            [2, "△", C.yellow, "あやふや"],
+                            [3, "○", C.blue, "一応"],
+                            [4, "◎", C.green, "万全"],
+                          ].map(([lv, mark, col, lbl]) => (
+                            <button key={lv} onClick={() => setUnderstanding(t.id, t.understanding === lv ? null : lv)}
+                              title={lbl}
+                              style={{
+                                width: 22, height: 22, borderRadius: 4,
+                                background: t.understanding === lv ? col : "transparent",
+                                border: `1px solid ${t.understanding === lv ? col : C.border}`,
+                                color: t.understanding === lv ? "#fff" : C.textDim,
+                                fontSize: 11, fontWeight: 700, cursor: "pointer",
+                                padding: 0, lineHeight: 1, fontFamily: font,
+                              }}>{mark}</button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {t.minutes ? (
+                      <span style={{
+                        fontSize: 11, color: activeSubjectData.color, fontWeight: 600,
+                        background: activeSubjectData.color + "18", padding: "2px 7px",
+                        borderRadius: 4, flexShrink: 0,
+                      }}>{fmtH(t.minutes)}</span>
+                    ) : null}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
+                      <div style={{ display: "flex", gap: 3 }}>
+                        <button onClick={() => setMonthPickerTodo(t)} title="月を選んで追加"
+                          style={{
+                            ...btn(inAnyMonthly(t.id), C.purple, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
+                          }}>月{inAnyMonthly(t.id) ? `(${monthsOf(t.id).length})` : ""}</button>
+                        <button onClick={() => sendToWeekly(t)} title="今週に追加"
+                          style={{
+                            ...btn(inWeekly(t.id), C.blue, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
+                          }}>週</button>
+                        <button onClick={() => sendToToday(t)} title="今日に追加"
+                          style={{
+                            ...btn(inToday(t.id), C.accent, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
+                          }}>日</button>
+                      </div>
+                      <button onClick={() => deleteTodo(t.id)} style={{ ...btn(false, C.red, { padding: "2px 5px", fontSize: 9, lineHeight: 1 }) }}>✕</button>
+                    </div>
+                  </>
+                )}
+              </div>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <div style={{ ...card(), textAlign: "center", padding: 30, color: C.textMid }}>
+          科目を追加してください
+        </div>
+      )}
+
+      {/* Month picker modal */}
+      {monthPickerTodo && (() => {
+        const todo = monthPickerTodo;
+        const subjData = subjects.find(s => s.id === todo.subjectId);
+        const alreadyIn = monthsOf(todo.id);
+        // Show 18 months from current
+        const monthList = Array.from({ length: 18 }, (_, i) => {
+          const d = new Date();
+          d.setDate(1);
+          d.setMonth(d.getMonth() + i);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          const label = `${d.getFullYear() !== new Date().getFullYear() ? d.getFullYear() + "年" : ""}${MONTHS_JA[d.getMonth()]}`;
+          const offset = i === 0 ? "今月" : i === 1 ? "来月" : i === 2 ? "再来月" : `+${i}ヶ月`;
+          return { key, label, offset, isFuture: i > 0 };
+        });
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }} onClick={() => setMonthPickerTodo(null)}>
+            <div style={{ ...card({ maxWidth: 420, width: "100%", maxHeight: "80vh", display: "flex", flexDirection: "column" }) }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontFamily: serif, fontSize: 16, color: C.text, marginBottom: 4 }}>月を選んで予定</div>
+              <div style={{ fontSize: 12, color: subjData?.color || C.accent, marginBottom: 12 }}>{todo.text}</div>
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                {monthList.map(m => {
+                  const isIn = alreadyIn.includes(m.key);
+                  return (
+                    <button key={m.key} onClick={() => {
+                      if (isIn) {
+                        setMonthlyPlans(ps => ps.filter(p => !(p.month === m.key && p.todoId === todo.id)));
+                      } else {
+                        sendToMonthly(todo, m.key);
+                      }
+                    }} style={{
+                      padding: "10px 14px", borderRadius: 8,
+                      background: isIn ? C.purple : C.surfaceUp,
+                      border: `1px solid ${isIn ? C.purple : C.border}`,
+                      color: isIn ? "#fff" : C.text,
+                      fontFamily: font, fontSize: 13, cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 8,
+                    }}>
+                      <span style={{ flex: 1, textAlign: "left" }}>{m.label}</span>
+                      <span style={{ fontSize: 11, opacity: 0.7 }}>{m.offset}</span>
+                      {isIn && <span>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <button onClick={() => setMonthPickerTodo(null)}
+                style={{ ...btn(false, C.textMid, { width: "100%", padding: "9px", marginTop: 12 }) }}>閉じる</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Bulk month picker modal */}
+      {bulkMonthPicker && (() => {
+        const selTodos = subjectTodos.filter(t => selectedTodos.includes(t.id));
+        const totalMin = selTodos.reduce((s, t) => s + (t.minutes || 0), 0);
+        const monthList = Array.from({ length: 18 }, (_, i) => {
+          const d = new Date();
+          d.setDate(1);
+          d.setMonth(d.getMonth() + i);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          const label = `${d.getFullYear() !== new Date().getFullYear() ? d.getFullYear() + "年" : ""}${MONTHS_JA[d.getMonth()]}`;
+          const offset = i === 0 ? "今月" : i === 1 ? "来月" : i === 2 ? "再来月" : `+${i}ヶ月`;
+          // count how many of selected todos already in this month
+          const inCount = selTodos.filter(t => monthlyPlans.some(p => p.month === key && p.todoId === t.id)).length;
+          return { key, label, offset, inCount };
+        });
+        const fmtHourMin = (m) => m >= 60 ? `${Math.floor(m/60)}h${m%60 ? (m%60)+"m" : ""}` : `${m}m`;
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }} onClick={() => setBulkMonthPicker(false)}>
+            <div style={{ ...card({ maxWidth: 420, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column" }) }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontFamily: serif, fontSize: 16, color: C.text, marginBottom: 4 }}>月にまとめて追加</div>
+              <div style={{ fontSize: 12, color: C.accent, marginBottom: 12 }}>
+                {selTodos.length}件 / {fmtHourMin(totalMin)}
+              </div>
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                {monthList.map(m => (
+                  <button key={m.key} onClick={() => {
+                    // Add all selected todos to this month (skip dupes)
+                    const newPlans = [];
+                    selTodos.forEach(t => {
+                      if (!monthlyPlans.some(p => p.month === m.key && p.todoId === t.id)) {
+                        newPlans.push({
+                          id: genId(), month: m.key, todoId: t.id,
+                          subjectId: t.subjectId, createdAt: Date.now() + Math.random(),
+                        });
+                      }
+                    });
+                    if (newPlans.length) setMonthlyPlans(ps => [...ps, ...newPlans]);
+                  }} style={{
+                    padding: "10px 14px", borderRadius: 8,
+                    background: m.inCount === selTodos.length ? C.purple : C.surfaceUp,
+                    border: `1px solid ${m.inCount > 0 ? C.purple : C.border}`,
+                    color: m.inCount === selTodos.length ? "#fff" : C.text,
+                    fontFamily: font, fontSize: 13, cursor: "pointer",
+                    display: "flex", alignItems: "center", gap: 8,
+                  }}>
+                    <span style={{ flex: 1, textAlign: "left" }}>{m.label}</span>
+                    <span style={{ fontSize: 11, opacity: 0.7 }}>{m.offset}</span>
+                    {m.inCount > 0 && (
+                      <span style={{ fontSize: 11 }}>{m.inCount}/{selTodos.length}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <button onClick={() => setBulkMonthPicker(false)}
+                  style={{ ...btn(false, C.textMid, { flex: 1, padding: "9px" }) }}>キャンセル</button>
+                <button onClick={() => { setBulkMonthPicker(false); setSelectMode(false); setSelectedTodos([]); }}
+                  style={{ ...btn(true, C.accent, { flex: 1, padding: "9px" }) }}>完了</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   WEEK VIEW
+══════════════════════════════════════════════════════ */
+function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans, setWeeklyPlans, subjects, subjectTodos, setView }) {
+  const dates = getWeekDates(selectedDate);
+  const today = todayStr();
+  const [expandedDate, setExpandedDate] = useState(today);
+  const [collapsedSubjects, setCollapsedSubjects] = useState([]);
+  const [dayPickerTodo, setDayPickerTodo] = useState(null);
+  const toggleCollapse = (id) => setCollapsedSubjects(c => c.includes(id) ? c.filter(x => x !== id) : [...c, id]);
+
+  const getTasksForDate = (d) => tasks.filter(t => t.date === d);
+  const getDoneCount = (d) => getTasksForDate(d).filter(t => t.done).length;
+  const getTotalCount = (d) => getTasksForDate(d).length;
+
+  return (
+    <div style={{ padding: 16, maxWidth: 600, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button onClick={() => setSelectedDate(addDays(selectedDate, -7))} style={{ ...btn(), padding: "5px 10px" }}>‹</button>
+        <div style={{ flex: 1, fontFamily: serif, fontSize: 17, color: C.text, textAlign: "center" }}>
+          {new Date(dates[0] + "T00:00:00").toLocaleDateString("ja-JP", { month: "long", day: "numeric" })}
+          〜
+          {new Date(dates[6] + "T00:00:00").toLocaleDateString("ja-JP", { month: "long", day: "numeric" })}
+        </div>
+        <button onClick={() => setSelectedDate(addDays(selectedDate, 7))} style={{ ...btn(), padding: "5px 10px" }}>›</button>
+        <button onClick={() => setSelectedDate(todayStr())} style={{ ...btn(false, C.accent, { fontSize: 11, padding: "5px 9px" }) }}>今週</button>
+      </div>
+
+      {/* Weekly heatmap */}
+      <div style={{ ...card(), padding: 16 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 10 }}>今週の達成状況（タップで予定を表示）</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {dates.map(d => {
+            const done = getDoneCount(d);
+            const total = getTotalCount(d);
+            const rate = total ? done / total : 0;
+            const isToday = d === today;
+            return (
+              <button key={d} onClick={() => setExpandedDate(d === expandedDate ? null : d)} style={{
+                flex: 1, textAlign: "center", background: "none", border: "none", padding: 0,
+                cursor: "pointer", fontFamily: font,
+              }}>
+                <div style={{ fontSize: 11, color: isToday ? C.accent : C.textDim, fontWeight: isToday ? 700 : 400, marginBottom: 4 }}>
+                  {DAYS_JA[new Date(d + "T00:00:00").getDay()]}
+                </div>
+                <div style={{
+                  height: 50, borderRadius: 8, marginBottom: 4,
+                  background: total === 0 ? C.surfaceUp :
+                    `rgba(${rate >= 0.7 ? "111,207,151" : rate >= 0.4 ? "246,211,101" : "235,87,87"},${0.2 + rate * 0.6})`,
+                  border: `2px solid ${d === expandedDate ? C.accent : isToday ? C.accent : C.border}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                    {total > 0 ? `${done}/${total}` : "–"}
+                  </div>
+                </div>
+                <div style={{ fontSize: 10, color: C.textDim }}>
+                  {new Date(d + "T00:00:00").getDate()}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Expanded day tasks */}
+      {expandedDate && (() => {
+        const dayTasks = tasks.filter(t => t.date === expandedDate).sort((a, b) => (a.hour ?? 99) - (b.hour ?? 99));
+        const dateObj = new Date(expandedDate + "T00:00:00");
+        const priorityColor = { high: C.red, medium: C.yellow, low: C.green };
+        return (
+          <div style={card()}>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+              <div style={{ flex: 1, fontSize: 13, fontWeight: 700, color: C.accent }}>
+                {dateObj.toLocaleDateString("ja-JP", { month: "long", day: "numeric" })}({DAYS_JA[dateObj.getDay()]})の予定
+              </div>
+              <button onClick={() => { setSelectedDate(expandedDate); setView("day"); }}
+                style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>編集 →</button>
+            </div>
+            {dayTasks.length === 0 ? (
+              <div style={{ fontSize: 12, color: C.textDim, textAlign: "center", padding: 10 }}>予定なし</div>
+            ) : dayTasks.map(t => {
+              const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
+              return (
+                <div key={t.id} style={{
+                  display: "flex", alignItems: "center", gap: 8, padding: "8px 0",
+                  borderBottom: `1px solid ${C.border}`, opacity: t.done ? 0.55 : 1,
+                }}>
+                  <div style={{ fontSize: 11, color: C.textMid, fontFamily: font, minWidth: 78, fontVariantNumeric: "tabular-nums" }}>
+                    {fmtTime(t.hour)}〜{fmtTime(t.hour + t.duration)}
+                  </div>
+                  <div style={{ flex: 1, fontSize: 13, color: C.text, textDecoration: t.done ? "line-through" : "none" }}>
+                    {t.kind === "other" && <span style={{ color: C.textMid, marginRight: 4 }}>📌</span>}
+                    {t.title}
+                    {subjData && <span style={{ color: subjData.color, marginLeft: 6, fontSize: 11 }}>• {subjData.name}</span>}
+                  </div>
+                  {t.done && <span style={{ color: C.green, fontSize: 13 }}>✓</span>}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {/* Weekly TODOs grouped by subject */}
+      {(() => {
+        const thisWeekStart = dates[0];
+        const thisWeekPlans = weeklyPlans.filter(p => p.weekStart === thisWeekStart);
+        if (thisWeekPlans.length === 0) return (
+          <div style={{ ...card(), textAlign: "center", padding: 20, fontSize: 12, color: C.textMid }}>
+            「📅 月次」または「📚 科目」画面の <span style={{ color: C.blue }}>週</span> ボタンで今週やるTODOを追加できます
+          </div>
+        );
+        const fmtH = (m) => m >= 60 ? `${Math.floor(m/60)}h${m%60 ? (m%60)+"m" : ""}` : `${m}m`;
+        const subjectGroups = subjects.map(s => {
+          const plans = thisWeekPlans.filter(p => p.subjectId === s.id);
+          if (plans.length === 0) return null;
+          const todoData = plans.map(p => ({ plan: p, todo: subjectTodos.find(t => t.id === p.todoId) })).filter(x => x.todo);
+          const totalMin = todoData.reduce((sum, x) => sum + (x.todo.minutes || 0), 0);
+          const doneMin = todoData.filter(x => { const s = x.todo.status || (x.todo.done ? "done" : "unwatched"); return s === "done" || s === "reviewing"; }).reduce((sum, x) => sum + (x.todo.minutes || 0), 0);
+          const inDay = (todoId) => tasks.some(t => dates.includes(t.date) && t.subjectTodoId === todoId);
+          return { subject: s, todoData, totalMin, doneMin, inDay };
+        }).filter(Boolean);
+
+        return subjectGroups.map(g => {
+          const collapsed = collapsedSubjects.includes(g.subject.id);
+          return (
+          <div key={g.subject.id} style={{ ...card(), borderLeft: `4px solid ${g.subject.color}` }}>
+            <div onClick={() => toggleCollapse(g.subject.id)}
+              style={{ display: "flex", alignItems: "center", marginBottom: collapsed ? 0 : 8, cursor: "pointer", gap: 8 }}>
+              <div style={{ fontSize: 11, color: C.textDim, width: 14 }}>{collapsed ? "▶" : "▼"}</div>
+              <div style={{ flex: 1, fontSize: 14, fontWeight: 700, color: C.text }}>
+                {g.subject.name}
+                {collapsed && <span style={{ fontSize: 11, color: C.textMid, marginLeft: 6, fontWeight: 400 }}>({g.todoData.length}件)</span>}
+              </div>
+              <div style={{ fontSize: 11, color: C.textMid }}>
+                {fmtH(g.doneMin)} 視聴済 / 残 <span style={{ color: g.subject.color, fontWeight: 700 }}>{fmtH(Math.max(0, g.totalMin - g.doneMin))}</span>
+              </div>
+            </div>
+            {!collapsed && (
+              <>
+                <div style={{ height: 4, background: C.border, borderRadius: 2, marginBottom: 10, overflow: "hidden" }}>
+                  <div style={{ width: g.totalMin ? `${(g.doneMin / g.totalMin) * 100}%` : "0%", height: "100%", background: g.subject.color }} />
+                </div>
+                {g.todoData.map(({ plan, todo }) => {
+                  const st = todo.status || (todo.done ? "done" : "unwatched");
+                  const isInDay = g.inDay(todo.id);
+                  return (
+                    <div key={plan.id} style={{
+                      display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
+                      borderBottom: `1px solid ${C.border}`, opacity: st === "done" ? 0.55 : 1,
+                    }}>
+                      <span style={{ fontSize: 13, color: C.text, flex: 1, textDecoration: st === "done" ? "line-through" : "none" }}>
+                        {todo.text}
+                      </span>
+                      {todo.minutes && <span style={{ fontSize: 11, color: g.subject.color }}>{fmtH(todo.minutes)}</span>}
+                      <button onClick={() => setDayPickerTodo(todo)}
+                        style={{ ...btn(isInDay, C.accent, { padding: "3px 8px", fontSize: 10 }) }}>
+                        {isInDay ? "予定済" : "日選択"}
+                      </button>
+                      <button onClick={() => setWeeklyPlans(ps => ps.filter(p => p.id !== plan.id))}
+                        style={{ ...btn(false, C.red, { padding: "3px 6px", fontSize: 10 }) }}>✕</button>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+          );
+        });
+      })()}
+
+      {/* Day picker modal */}
+      {dayPickerTodo && (() => {
+        const todo = dayPickerTodo;
+        const subjData = subjects.find(s => s.id === todo.subjectId);
+        const inDay = (d) => tasks.some(t => t.date === d && t.subjectTodoId === todo.id);
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }} onClick={() => setDayPickerTodo(null)}>
+            <div style={{ ...card({ maxWidth: 420, width: "100%", maxHeight: "80vh", display: "flex", flexDirection: "column" }) }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontFamily: serif, fontSize: 16, color: C.text, marginBottom: 4 }}>日を選んで予定</div>
+              <div style={{ fontSize: 12, color: subjData?.color || C.accent, marginBottom: 12 }}>{todo.text}</div>
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                {dates.map(d => {
+                  const dObj = new Date(d + "T00:00:00");
+                  const isIn = inDay(d);
+                  const isTodayD = d === today;
+                  const isPast = d < today;
+                  const dayName = DAYS_JA[dObj.getDay()];
+                  return (
+                    <button key={d} onClick={() => {
+                      if (isIn) return;
+                      const dur = todo.minutes ? Math.max(0.5, Math.round(todo.minutes / 60 * 2) / 2) : 1;
+                      setTasks(ts => [...ts, {
+                        id: genId(), date: d, title: todo.text,
+                        hour: null, duration: dur, priority: "medium",
+                        actual: null, done: false, note: "",
+                        goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
+                      }]);
+                      setDayPickerTodo(null);
+                    }} disabled={isIn} style={{
+                      padding: "10px 14px", borderRadius: 8,
+                      background: isIn ? C.accent : C.surfaceUp,
+                      border: `1px solid ${isIn ? C.accent : C.border}`,
+                      color: isIn ? "#fff" : isPast ? C.textDim : C.text,
+                      fontFamily: font, fontSize: 13,
+                      cursor: isIn ? "default" : "pointer",
+                      display: "flex", alignItems: "center", gap: 8,
+                    }}>
+                      <span style={{ flex: 1, textAlign: "left" }}>
+                        {dObj.getMonth() + 1}/{dObj.getDate()}({dayName})
+                      </span>
+                      {isTodayD && <span style={{ fontSize: 10, opacity: 0.85 }}>今日</span>}
+                      {isIn && <span>✓ 追加済</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <button onClick={() => setDayPickerTodo(null)}
+                style={{ ...btn(false, C.textMid, { width: "100%", padding: "9px", marginTop: 12 }) }}>閉じる</button>
+            </div>
+          </div>
+        );
+      })()}
+
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   MONTH VIEW
+══════════════════════════════════════════════════════ */
+function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeeklyPlans, subjects, subjectTodos, setView, selectedDate }) {
+  const [monthOffset, setMonthOffset] = useState(0); // 0 = this month, 1 = next, etc.
+  const [collapsedSubjects, setCollapsedSubjects] = useState([]);
+  const [weekPickerTodo, setWeekPickerTodo] = useState(null);
+  const today = todayStr();
+  const toggleCollapse = (id) => setCollapsedSubjects(c => c.includes(id) ? c.filter(x => x !== id) : [...c, id]);
+
+  // Calendar for viewing month (with offset)
+  const now = new Date();
+  const viewingDate = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+  const year = viewingDate.getFullYear();
+  const month = viewingDate.getMonth();
+  const thisMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const days = Array.from({ length: daysInMonth }, (_, i) => {
+    const d = new Date(year, month, i + 1);
+    return d.toISOString().split("T")[0];
+  });
+  const weekDates = getWeekDates(selectedDate);
+  const isViewingCurrentMonth = monthOffset === 0;
+
+  return (
+    <div style={{ padding: 16, maxWidth: 600, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* Month navigation */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => setMonthOffset(o => o - 12)} style={{ ...btn(), padding: "5px 8px", fontSize: 11 }}>‹‹ 1年</button>
+        <button onClick={() => setMonthOffset(o => o - 1)} style={{ ...btn(), padding: "5px 10px" }}>‹</button>
+        <div style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ fontFamily: serif, fontSize: 18, color: C.text }}>
+            {year !== now.getFullYear() && <span style={{ fontSize: 13, color: C.textMid, marginRight: 4 }}>{year}年</span>}
+            {MONTHS_JA[month]}
+            {isViewingCurrentMonth && <span style={{ color: C.accent, fontSize: 12, marginLeft: 6 }}>• 今月</span>}
+            {monthOffset !== 0 && <span style={{ color: C.textDim, fontSize: 11, marginLeft: 6 }}>
+              ({monthOffset > 0 ? `+${monthOffset}ヶ月` : `${monthOffset}ヶ月`})
+            </span>}
+          </div>
+        </div>
+        <button onClick={() => setMonthOffset(o => o + 1)} style={{ ...btn(), padding: "5px 10px" }}>›</button>
+        <button onClick={() => setMonthOffset(o => o + 12)} style={{ ...btn(), padding: "5px 8px", fontSize: 11 }}>1年 ››</button>
+      </div>
+      <div style={{ display: "flex", gap: 5, overflowX: "auto" }}>
+        <button onClick={() => setMonthOffset(0)} style={{ ...btn(isViewingCurrentMonth, C.accent, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>今月</button>
+        <button onClick={() => setMonthOffset(1)} style={{ ...btn(monthOffset === 1, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>来月</button>
+        <button onClick={() => setMonthOffset(2)} style={{ ...btn(monthOffset === 2, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>再来月</button>
+        <button onClick={() => setMonthOffset(3)} style={{ ...btn(monthOffset === 3, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>3ヶ月後</button>
+        <button onClick={() => setMonthOffset(6)} style={{ ...btn(monthOffset === 6, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>半年後</button>
+        <button onClick={() => setMonthOffset(12)} style={{ ...btn(monthOffset === 12, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>1年後</button>
+      </div>
+
+      {/* Monthly TODOs grouped by subject */}
+      {(() => {
+        const thisMonthPlans = monthlyPlans.filter(p => p.month === thisMonth);
+        if (thisMonthPlans.length === 0) return (
+          <div style={{ ...card(), textAlign: "center", padding: 20, fontSize: 12, color: C.textMid }}>
+            {isViewingCurrentMonth ? "今月" : `${MONTHS_JA[month]}`}のTODOがありません<br/>
+            <span style={{ fontSize: 11, color: C.textDim }}>「📚 科目」画面の <span style={{ color: C.purple }}>月</span> ボタンで追加できます</span>
+          </div>
+        );
+        const fmtH = (m) => m >= 60 ? `${Math.floor(m/60)}h${m%60 ? (m%60)+"m" : ""}` : `${m}m`;
+        const subjectGroups = subjects.map(s => {
+          const plans = thisMonthPlans.filter(p => p.subjectId === s.id);
+          if (plans.length === 0) return null;
+          const todoData = plans.map(p => ({ plan: p, todo: subjectTodos.find(t => t.id === p.todoId) })).filter(x => x.todo);
+          const totalMin = todoData.reduce((sum, x) => sum + (x.todo.minutes || 0), 0);
+          const doneMin = todoData.filter(x => { const s = x.todo.status || (x.todo.done ? "done" : "unwatched"); return s === "done" || s === "reviewing"; }).reduce((sum, x) => sum + (x.todo.minutes || 0), 0);
+          const inWeek = (todoId) => weeklyPlans.some(wp => weekDates.includes(wp.weekStart) && wp.todoId === todoId);
+          return { subject: s, todoData, totalMin, doneMin, inWeek };
+        }).filter(Boolean);
+
+        return subjectGroups.map(g => {
+          const collapsed = collapsedSubjects.includes(g.subject.id);
+          return (
+          <div key={g.subject.id} style={{ ...card(), borderLeft: `4px solid ${g.subject.color}` }}>
+            <div onClick={() => toggleCollapse(g.subject.id)}
+              style={{ display: "flex", alignItems: "center", marginBottom: collapsed ? 0 : 10, cursor: "pointer", gap: 8 }}>
+              <div style={{ fontSize: 11, color: C.textDim, width: 14 }}>{collapsed ? "▶" : "▼"}</div>
+              <div style={{ flex: 1, fontSize: 14, fontWeight: 700, color: C.text }}>
+                {g.subject.name}
+                {collapsed && <span style={{ fontSize: 11, color: C.textMid, marginLeft: 6, fontWeight: 400 }}>({g.todoData.length}件)</span>}
+              </div>
+              <div style={{ fontSize: 11, color: C.textMid }}>
+                {fmtH(g.doneMin)} 視聴済 / 残 <span style={{ color: g.subject.color, fontWeight: 700 }}>{fmtH(Math.max(0, g.totalMin - g.doneMin))}</span>
+              </div>
+            </div>
+            {!collapsed && (
+              <>
+                <div style={{ height: 4, background: C.border, borderRadius: 2, marginBottom: 10, overflow: "hidden" }}>
+                  <div style={{ width: g.totalMin ? `${(g.doneMin / g.totalMin) * 100}%` : "0%", height: "100%", background: g.subject.color }} />
+                </div>
+                {g.todoData.map(({ plan, todo }) => {
+                  const st = todo.status || (todo.done ? "done" : "unwatched");
+                  const isInWeek = g.inWeek(todo.id);
+                  return (
+                    <div key={plan.id} style={{
+                      display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
+                      borderBottom: `1px solid ${C.border}`, opacity: st === "done" ? 0.55 : 1,
+                    }}>
+                      <span style={{ fontSize: 13, color: C.text, flex: 1, textDecoration: st === "done" ? "line-through" : "none" }}>
+                        {todo.text}
+                      </span>
+                      {todo.minutes && <span style={{ fontSize: 11, color: g.subject.color }}>{fmtH(todo.minutes)}</span>}
+                      <button onClick={() => setWeekPickerTodo(todo)}
+                        style={{ ...btn(isInWeek, C.blue, { padding: "3px 8px", fontSize: 10 }) }}>
+                        {isInWeek ? "週次済" : "週次→"}
+                      </button>
+                      <button onClick={() => setMonthlyPlans(ps => ps.filter(p => p.id !== plan.id))}
+                        style={{ ...btn(false, C.red, { padding: "3px 6px", fontSize: 10 }) }}>✕</button>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+          );
+        });
+      })()}
+
+      {/* Week picker modal */}
+      {weekPickerTodo && (() => {
+        const todo = weekPickerTodo;
+        const subjData = subjects.find(s => s.id === todo.subjectId);
+        const fmtLocal = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+        const firstOfMonth = new Date(year, month, 1);
+        const firstMon = new Date(firstOfMonth);
+        firstMon.setDate(firstOfMonth.getDate() - ((firstOfMonth.getDay() + 6) % 7));
+        const weeks = Array.from({ length: 10 }, (_, i) => {
+          const wStart = new Date(firstMon);
+          wStart.setDate(firstMon.getDate() + i * 7);
+          const wEnd = new Date(wStart);
+          wEnd.setDate(wStart.getDate() + 6);
+          const startStr = fmtLocal(wStart);
+          return { startStr, wStart, wEnd, ended: wEnd < new Date(today + "T00:00:00") };
+        }).filter(w => !w.ended);
+        const inWeek = (wStart) => weeklyPlans.some(p => p.weekStart === wStart && p.todoId === todo.id);
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }} onClick={() => setWeekPickerTodo(null)}>
+            <div style={{ ...card({ maxWidth: 420, width: "100%", maxHeight: "80vh", display: "flex", flexDirection: "column" }) }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontFamily: serif, fontSize: 16, color: C.text, marginBottom: 4 }}>週を選んでスケジュール</div>
+              <div style={{ fontSize: 12, color: subjData?.color || C.accent, marginBottom: 12 }}>{todo.text}</div>
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                {weeks.map(w => {
+                  const isIn = inWeek(w.startStr);
+                  const isThisWeek = w.startStr === getWeekDates(today)[0];
+                  const wEndLabel = `${w.wEnd.getMonth()+1}/${w.wEnd.getDate()}`;
+                  const wStartLabel = `${w.wStart.getMonth()+1}/${w.wStart.getDate()}`;
+                  return (
+                    <button key={w.startStr} onClick={() => {
+                      if (isIn) {
+                        setWeeklyPlans(ps => ps.filter(p => !(p.weekStart === w.startStr && p.todoId === todo.id)));
+                      } else {
+                        setWeeklyPlans(ps => [...ps, {
+                          id: genId(), weekStart: w.startStr, todoId: todo.id,
+                          subjectId: todo.subjectId, createdAt: Date.now(),
+                        }]);
+                      }
+                    }} style={{
+                      padding: "10px 14px", borderRadius: 8,
+                      background: isIn ? C.blue : C.surfaceUp,
+                      border: `1px solid ${isIn ? C.blue : C.border}`,
+                      color: isIn ? "#fff" : C.text,
+                      fontFamily: font, fontSize: 13, cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 8,
+                    }}>
+                      <span style={{ flex: 1, textAlign: "left" }}>{wStartLabel}(月) 〜 {wEndLabel}(日)</span>
+                      {isThisWeek && <span style={{ fontSize: 10, opacity: 0.85 }}>今週</span>}
+                      {isIn && <span>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <button onClick={() => setWeekPickerTodo(null)}
+                style={{ ...btn(false, C.textMid, { width: "100%", padding: "9px", marginTop: 12 }) }}>閉じる</button>
+            </div>
+          </div>
+        );
+      })()}
+
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   GOALS VIEW
+══════════════════════════════════════════════════════ */
+function GoalsView({ goals, setGoals }) {
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ title: "", deadline: addDays(todayStr(), 90), note: "", color: C.blue });
+
+  const COLORS = [C.blue, C.green, C.accent, C.purple, C.red, C.yellow];
+
+  const addGoal = () => {
+    if (!form.title.trim()) return;
+    setGoals(gs => [...gs, { id: genId(), ...form }]);
+    setForm({ title: "", deadline: addDays(todayStr(), 90), note: "", color: C.blue });
+    setShowForm(false);
+  };
+
+  const deleteGoal = (id) => setGoals(gs => gs.filter(g => g.id !== id));
+
+  return (
+    <div style={{ padding: 16, maxWidth: 560, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ fontFamily: serif, fontSize: 18, color: C.text, textAlign: "center" }}>長期ゴール</div>
+
+      {[...goals].sort((a, b) => (a.deadline || "").localeCompare(b.deadline || "")).map(g => {
+        const deadline = new Date(g.deadline + "T00:00:00");
+        const today = new Date();
+        const daysLeft = Math.ceil((deadline - today) / 86400000);
+
+        return (
+          <div key={g.id} style={{ ...card(), borderLeft: `4px solid ${g.color}` }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{g.title}</div>
+                {g.note && <div style={{ fontSize: 12, color: C.textMid, marginTop: 3 }}>{g.note}</div>}
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: daysLeft < 14 ? C.red : daysLeft < 30 ? C.yellow : g.color, fontFamily: serif }}>
+                  {daysLeft > 0 ? `あと${daysLeft}日` : "期限切れ"}
+                </div>
+                <div style={{ fontSize: 11, color: C.textMid }}>
+                  {deadline.toLocaleDateString("ja-JP", { month: "short", day: "numeric" })}まで
+                </div>
+              </div>
+            </div>
+
+            <button onClick={() => deleteGoal(g.id)} style={{ ...btn(false, C.red, { fontSize: 11, marginTop: 10, padding: "3px 10px" }) }}>削除</button>
+          </div>
+        );
+      })}
+
+      <button onClick={() => setShowForm(!showForm)} style={{ ...btn(showForm, C.accent, { width: "100%", padding: "10px" }) }}>
+        {showForm ? "✕ 閉じる" : "+ ゴールを追加"}
+      </button>
+
+      {showForm && (
+        <div style={card()}>
+          <input style={input({ marginBottom: 10 })} placeholder="ゴールタイトル" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} />
+          <input style={input({ marginBottom: 10 })} placeholder="メモ・詳細（任意）" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>期限</div>
+            <input type="date" style={input()} value={form.deadline} onChange={e => setForm(f => ({ ...f, deadline: e.target.value }))} />
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>カラー</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {COLORS.map(c => (
+                <button key={c} onClick={() => setForm(f => ({ ...f, color: c }))}
+                  style={{ width: 28, height: 28, borderRadius: "50%", background: c, border: `3px solid ${form.color === c ? C.text : "transparent"}`, cursor: "pointer" }} />
+              ))}
+            </div>
+          </div>
+          <button onClick={addGoal} style={{ ...btn(true, C.accent, { width: "100%", padding: "9px" }) }}>追加</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   SETTINGS MODAL
+══════════════════════════════════════════════════════ */
+function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, setSyncEmail, syncStatus, lastSyncedAt, manualPull }) {
+  const [local, setLocal] = useState({ dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", ...settings });
+  const [localEmail, setLocalEmail] = useState(syncEmail || "");
+  const [confirmReset, setConfirmReset] = useState(false);
+  const statusMap = {
+    idle: { text: "未同期", color: C.textMid },
+    syncing: { text: "同期中…", color: C.blue },
+    synced: { text: "✓ 同期済み", color: C.green },
+    error: { text: "⚠ エラー", color: C.red },
+  };
+  const status = statusMap[syncStatus] || statusMap.idle;
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+    }} onClick={onClose}>
+      <div style={{ ...card({ maxWidth: 360, width: "100%", padding: 24, maxHeight: "85vh", overflowY: "auto" }) }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontFamily: serif, fontSize: 18, color: C.accent, marginBottom: 16 }}>設定</div>
+
+        {/* Cloud sync */}
+        <div style={{ marginBottom: 14, padding: 12, background: C.surfaceUp, borderRadius: 8, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 12, color: C.textMid, marginBottom: 6, fontWeight: 700 }}>☁ クラウド同期（iPhone・iPad間で共有）</div>
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6 }}>
+            同じメールアドレスを入れた端末同士でデータが同期されます。
+          </div>
+          <input style={{ ...input(), WebkitAppearance: "none", appearance: "none" }}
+            type="email" placeholder="your@email.com"
+            value={localEmail} onChange={e => setLocalEmail(e.target.value)} />
+          {syncEmail && (
+            <div style={{ display: "flex", alignItems: "center", marginTop: 6, gap: 8 }}>
+              <span style={{ fontSize: 11, color: status.color, fontWeight: 600 }}>{status.text}</span>
+              {lastSyncedAt > 0 && (
+                <span style={{ fontSize: 10, color: C.textDim }}>
+                  {new Date(lastSyncedAt).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              )}
+              <div style={{ flex: 1 }} />
+              <button onClick={manualPull}
+                style={{ ...btn(false, C.blue, { fontSize: 10, padding: "4px 8px" }) }}>↓ 取得</button>
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: C.textMid, marginBottom: 4 }}>試験までカウントダウン</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input style={{ ...input(), flex: 1, WebkitAppearance: "none", appearance: "none" }}
+              placeholder="ラベル"
+              value={local.examLabel} onChange={e => setLocal(s => ({ ...s, examLabel: e.target.value }))} />
+            <input type="date" style={{ ...input(), flex: 1.4, WebkitAppearance: "none", appearance: "none" }}
+              value={local.examDate || ""} onChange={e => setLocal(s => ({ ...s, examDate: e.target.value }))} />
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: C.textMid, marginBottom: 4 }}>タイムライン表示範囲</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <select style={{ ...input(), flex: 1 }} value={local.dayStartHour}
+              onChange={e => setLocal(s => ({ ...s, dayStartHour: +e.target.value }))}>
+              {Array.from({ length: 24 }, (_, i) => i).map(h => (
+                <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>
+              ))}
+            </select>
+            <span style={{ color: C.textMid, fontSize: 12 }}>〜</span>
+            <select style={{ ...input(), flex: 1 }} value={local.dayEndHour}
+              onChange={e => setLocal(s => ({ ...s, dayEndHour: +e.target.value }))}>
+              {Array.from({ length: 30 }, (_, i) => i + 1).filter(h => h > local.dayStartHour).map(h => (
+                <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ fontSize: 10, color: C.textDim, marginTop: 4 }}>
+            タスクは 0:00〜29:00 まで自由に登録できます（表示範囲外も保存されます）
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <button onClick={() => { setSettings(local); setSyncEmail(localEmail.trim()); onClose(); }}
+            style={{ ...btn(true, C.accent, { flex: 1, padding: "9px" }) }}>保存</button>
+          <button onClick={onClose} style={{ ...btn(false, C.textMid, { flex: 1, padding: "9px" }) }}>キャンセル</button>
+        </div>
+        <div style={{ paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>データ管理</div>
+          <button onClick={() => {
+            if (confirmReset) onReset();
+            else {
+              setConfirmReset(true);
+              setTimeout(() => setConfirmReset(false), 3000);
+            }
+          }} style={{ ...btn(confirmReset, C.red, { width: "100%", padding: "8px", fontSize: 12 }) }}>
+            {confirmReset ? "もう一度タップで削除" : "すべてのデータをリセット"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   APP ROOT
+══════════════════════════════════════════════════════ */
+const STORAGE_KEY = "dayflow_v1";
+
+// ────────── Cloud sync (Supabase) ──────────
+const SUPA_URL = "https://bspylkvejufqinglwfga.supabase.co";
+const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzcHlsa3ZlanVmcWluZ2x3ZmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MDc5MTAsImV4cCI6MjA5NTA4MzkxMH0.L9yyNoOQQ_hsBPAyut32d3rdgvW1W2mGffHRK2ZaH8w";
+
+async function cloudPull(email) {
+  if (!email) return null;
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/dayflow_data?user_email=eq.${encodeURIComponent(email)}&select=data,updated_at`, {
+      headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` },
+    });
+    if (!res.ok) return null;
+    const rows = await res.json();
+    return rows[0] || null;
+  } catch (e) { console.error("pull failed", e); return null; }
+}
+
+async function cloudPush(email, data) {
+  if (!email) return false;
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/dayflow_data`, {
+      method: "POST",
+      headers: {
+        apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates",
+      },
+      body: JSON.stringify({ user_email: email, data, updated_at: new Date().toISOString() }),
+    });
+    return res.ok;
+  } catch (e) { console.error("push failed", e); return false; }
+}
+
+function usePersistedState(key, initial) {
+  const [state, setState] = useState(() => {
+    try {
+      const raw = localStorage.getItem(`${STORAGE_KEY}_${key}`);
+      return raw !== null ? JSON.parse(raw) : initial;
+    } catch {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(`${STORAGE_KEY}_${key}`, JSON.stringify(state));
+    } catch {}
+  }, [key, state]);
+  return [state, setState];
+}
+
+function App() {
+  const today = todayStr();
+  const [view, setView] = useState("day");
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [tasks, setTasks] = usePersistedState("tasks", makeSampleTasks(today));
+  const [goals, setGoals] = usePersistedState("goals", SAMPLE_GOALS);
+  const [subjects, setSubjects] = usePersistedState("subjects", SAMPLE_SUBJECTS);
+  const [subjectTodos, setSubjectTodos] = usePersistedState("subjectTodos", SAMPLE_SUBJECT_TODOS);
+  const [monthlyPlans, setMonthlyPlans] = usePersistedState("monthlyPlans", []);
+  const [weeklyPlans, setWeeklyPlans] = usePersistedState("weeklyPlans", []);
+  const [settings, setSettings] = usePersistedState("settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答" });
+  const [syncEmail, setSyncEmail] = usePersistedState("syncEmail", "");
+  const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error
+  const [lastSyncedAt, setLastSyncedAt] = useState(0);
+  const [showSettings, setShowSettings] = useState(false);
+  const initialPulledRef = useRef(false);
+  const lastPushedDataRef = useRef("");
+
+  // Pull from cloud on initial load if email is set
+  useEffect(() => {
+    if (!syncEmail || initialPulledRef.current) return;
+    initialPulledRef.current = true;
+    setSyncStatus("syncing");
+    cloudPull(syncEmail).then(row => {
+      if (row && row.data) {
+        const d = row.data;
+        if (d.tasks) setTasks(d.tasks);
+        if (d.goals) setGoals(d.goals);
+        if (d.subjects) setSubjects(d.subjects);
+        if (d.subjectTodos) setSubjectTodos(d.subjectTodos);
+        if (d.monthlyPlans) setMonthlyPlans(d.monthlyPlans);
+        if (d.weeklyPlans) setWeeklyPlans(d.weeklyPlans);
+        if (d.settings) setSettings(d.settings);
+        setLastSyncedAt(Date.now());
+      }
+      setSyncStatus("synced");
+    });
+  }, [syncEmail]);
+
+  // Push to cloud (debounced 3s) when data changes
+  useEffect(() => {
+    if (!syncEmail || !initialPulledRef.current) return;
+    const payload = { tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings };
+    const serialized = JSON.stringify(payload);
+    if (serialized === lastPushedDataRef.current) return;
+    const timer = setTimeout(() => {
+      setSyncStatus("syncing");
+      cloudPush(syncEmail, payload).then(ok => {
+        if (ok) {
+          lastPushedDataRef.current = serialized;
+          setLastSyncedAt(Date.now());
+          setSyncStatus("synced");
+        } else {
+          setSyncStatus("error");
+        }
+      });
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [syncEmail, tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings]);
+
+  // Manual pull
+  const manualPull = async () => {
+    if (!syncEmail) return;
+    setSyncStatus("syncing");
+    const row = await cloudPull(syncEmail);
+    if (row && row.data) {
+      const d = row.data;
+      if (d.tasks) setTasks(d.tasks);
+      if (d.goals) setGoals(d.goals);
+      if (d.subjects) setSubjects(d.subjects);
+      if (d.subjectTodos) setSubjectTodos(d.subjectTodos);
+      if (d.monthlyPlans) setMonthlyPlans(d.monthlyPlans);
+      if (d.weeklyPlans) setWeeklyPlans(d.weeklyPlans);
+      if (d.settings) setSettings(d.settings);
+      lastPushedDataRef.current = JSON.stringify(d);
+      setLastSyncedAt(Date.now());
+      setSyncStatus("synced");
+    } else {
+      setSyncStatus("synced");
+    }
+  };
+
+  const resetAll = () => {
+    ["tasks", "goals", "subjects", "subjectTodos", "monthlyPlans", "weeklyPlans", "settings", "syncEmail"].forEach(k => {
+      try { localStorage.removeItem(`${STORAGE_KEY}_${k}`); } catch {}
+    });
+    location.reload();
+  };
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", color: C.text, fontFamily: font, display: "flex", flexDirection: "column" }}>
+      {/* Header */}
+      <div style={{
+        display: "flex", alignItems: "center", padding: "12px 16px",
+        background: C.surface, borderBottom: `1px solid ${C.border}`,
+        gap: 10,
+      }}>
+        <div style={{ fontFamily: serif, fontSize: 20, color: C.accent, letterSpacing: 1 }}>DayFlow</div>
+        {settings.examDate && (() => {
+          const [yy, mm, dd] = settings.examDate.split("-").map(Number);
+          const exam = new Date(yy, mm - 1, dd);
+          const today0 = new Date();
+          today0.setHours(0, 0, 0, 0);
+          const days = Math.ceil((exam - today0) / 86400000);
+          if (days < 0) return null;
+          const urgent = days <= 30;
+          return (
+            <div onClick={() => setShowSettings(true)} style={{
+              padding: "4px 10px", borderRadius: 12,
+              background: urgent ? C.red + "22" : C.accent + "18",
+              border: `1px solid ${urgent ? C.red + "60" : C.accent + "50"}`,
+              cursor: "pointer",
+              display: "flex", alignItems: "baseline", gap: 4,
+            }}>
+              <span style={{ fontSize: 9, color: urgent ? C.red : C.accent, fontWeight: 700 }}>
+                {settings.examLabel || "試験"}
+              </span>
+              <span style={{ fontSize: 14, color: urgent ? C.red : C.accent, fontWeight: 800, fontFamily: serif }}>
+                {days === 0 ? "今日" : `あと${days}日`}
+              </span>
+            </div>
+          );
+        })()}
+        <div style={{ flex: 1 }} />
+        {syncEmail && (
+          <div onClick={() => setShowSettings(true)} title={syncStatus}
+            style={{ fontSize: 14, cursor: "pointer", padding: "2px 6px" }}>
+            {syncStatus === "syncing" ? "⟳" : syncStatus === "synced" ? "✓" : syncStatus === "error" ? "⚠" : "☁"}
+          </div>
+        )}
+        <button onClick={() => setShowSettings(true)} style={{ ...btn(false, C.textMid, { padding: "5px 10px", fontSize: 14 }) }}>⚙</button>
+      </div>
+
+      <Nav view={view} setView={setView} />
+
+      {/* Views */}
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {view === "day"    && <DayView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} goals={goals} subjects={subjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} settings={settings} />}
+        {view === "review" && <ReviewView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} setView={setView} subjects={subjects} subjectTodos={subjectTodos} settings={settings} goals={goals} />}
+        {view === "subjects" && <SubjectsView subjects={subjects} setSubjects={setSubjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} goals={goals} />}
+        {view === "week"   && <WeekView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} />}
+        {view === "month"  && <MonthView goals={goals} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} selectedDate={selectedDate} />}
+        {view === "goals"  && <GoalsView goals={goals} setGoals={setGoals} />}
+      </div>
+
+      {showSettings && <SettingsModal settings={settings} setSettings={setSettings} onClose={() => setShowSettings(false)} onReset={resetAll}
+        syncEmail={syncEmail} setSyncEmail={setSyncEmail} syncStatus={syncStatus} lastSyncedAt={lastSyncedAt} manualPull={manualPull} />}
+    </div>
+  );
+}
+
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
