@@ -2221,6 +2221,9 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
   const [expandedDate, setExpandedDate] = useState(today);
   const [collapsedSubjects, setCollapsedSubjects] = useState([]);
   const [dayPickerTodo, setDayPickerTodo] = useState(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedTodos, setSelectedTodos] = useState([]);
+  const [bulkDayPicker, setBulkDayPicker] = useState(false);
   const toggleCollapse = (id) => setCollapsedSubjects(c => c.includes(id) ? c.filter(x => x !== id) : [...c, id]);
 
   const getTasksForDate = (d) => tasks.filter(t => t.date === d);
@@ -2336,7 +2339,34 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
           return { subject: s, todoData, totalMin, doneMin, inDay };
         }).filter(Boolean);
 
-        return subjectGroups.map(g => {
+        const allTodoIds = subjectGroups.flatMap(g => g.todoData.map(d => d.todo.id));
+
+        return (
+          <>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <button onClick={() => { setSelectMode(s => !s); setSelectedTodos([]); }}
+                style={{ ...btn(selectMode, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
+                {selectMode ? "✕ 選択終了" : "☑ 複数選択"}
+              </button>
+              {selectMode && (
+                <>
+                  <button onClick={() => setSelectedTodos(allTodoIds)}
+                    style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "5px 10px" }) }}>
+                    全選択
+                  </button>
+                  <div style={{ flex: 1, fontSize: 11, color: C.textMid, textAlign: "right" }}>
+                    {selectedTodos.length}件選択中
+                  </div>
+                  {selectedTodos.length > 0 && (
+                    <button onClick={() => setBulkDayPicker(true)}
+                      style={{ ...btn(true, C.accent, { fontSize: 11, padding: "5px 10px" }) }}>
+                      🌅 日に追加
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+            {subjectGroups.map(g => {
           const collapsed = collapsedSubjects.includes(g.subject.id);
           return (
           <div key={g.subject.id} style={{ ...card(), borderLeft: `4px solid ${g.subject.color}` }}>
@@ -2359,21 +2389,38 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                 {g.todoData.map(({ plan, todo }) => {
                   const st = todo.status || (todo.done ? "done" : "unwatched");
                   const isInDay = g.inDay(todo.id);
+                  const isSelected = selectedTodos.includes(todo.id);
                   return (
                     <div key={plan.id} style={{
                       display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
                       borderBottom: `1px solid ${C.border}`, opacity: st === "done" ? 0.55 : 1,
                     }}>
+                      {selectMode && (
+                        <button onClick={() => setSelectedTodos(sel =>
+                          sel.includes(todo.id) ? sel.filter(x => x !== todo.id) : [...sel, todo.id]
+                        )} style={{
+                          width: 22, height: 22, borderRadius: 4,
+                          border: `2px solid ${isSelected ? C.purple : C.border}`,
+                          background: isSelected ? C.purple : "transparent",
+                          color: "#fff", fontSize: 12, fontWeight: 700,
+                          cursor: "pointer", flexShrink: 0, padding: 0,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>{isSelected ? "✓" : ""}</button>
+                      )}
                       <span style={{ fontSize: 13, color: C.text, flex: 1, textDecoration: st === "done" ? "line-through" : "none" }}>
                         {todo.text}
                       </span>
                       {todo.minutes && <span style={{ fontSize: 11, color: g.subject.color }}>{fmtH(todo.minutes)}</span>}
-                      <button onClick={() => setDayPickerTodo(todo)}
-                        style={{ ...btn(isInDay, C.accent, { padding: "3px 8px", fontSize: 10 }) }}>
-                        {isInDay ? "予定済" : "日選択"}
-                      </button>
-                      <button onClick={() => setWeeklyPlans(ps => ps.filter(p => p.id !== plan.id))}
-                        style={{ ...btn(false, C.red, { padding: "3px 6px", fontSize: 10 }) }}>✕</button>
+                      {!selectMode && (
+                        <>
+                          <button onClick={() => setDayPickerTodo(todo)}
+                            style={{ ...btn(isInDay, C.accent, { padding: "3px 8px", fontSize: 10 }) }}>
+                            {isInDay ? "予定済" : "日選択"}
+                          </button>
+                          <button onClick={() => setWeeklyPlans(ps => ps.filter(p => p.id !== plan.id))}
+                            style={{ ...btn(false, C.red, { padding: "3px 6px", fontSize: 10 }) }}>✕</button>
+                        </>
+                      )}
                     </div>
                   );
                 })}
@@ -2381,7 +2428,9 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
             )}
           </div>
           );
-        });
+        })}
+          </>
+        );
       })()}
 
       {/* Day picker modal */}
@@ -2440,6 +2489,71 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
         );
       })()}
 
+      {/* Bulk day picker modal */}
+      {bulkDayPicker && (() => {
+        const selTodos = subjectTodos.filter(t => selectedTodos.includes(t.id));
+        const totalMin = selTodos.reduce((s, t) => s + (t.minutes || 0), 0);
+        const fmtH = (m) => m >= 60 ? `${Math.floor(m/60)}h${m%60 ? (m%60)+"m" : ""}` : `${m}m`;
+        const today0 = new Date(today + "T00:00:00");
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }} onClick={() => setBulkDayPicker(false)}>
+            <div style={{ ...card({ maxWidth: 420, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column" }) }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontFamily: serif, fontSize: 16, color: C.text, marginBottom: 4 }}>日にまとめて追加</div>
+              <div style={{ fontSize: 12, color: C.accent, marginBottom: 12 }}>
+                {selTodos.length}件 / {fmtH(totalMin)}
+              </div>
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                {dates.map(d => {
+                  const dObj = new Date(d + "T00:00:00");
+                  const dayName = DAYS_JA[dObj.getDay()];
+                  const isTodayD = d === today;
+                  const isPast = dObj < today0;
+                  const inCount = selTodos.filter(t => tasks.some(task => task.date === d && task.subjectTodoId === t.id)).length;
+                  return (
+                    <button key={d} onClick={() => {
+                      const newTasks = [];
+                      selTodos.forEach(t => {
+                        if (!tasks.some(task => task.date === d && task.subjectTodoId === t.id)) {
+                          const dur = t.minutes ? Math.max(0.5, Math.round(t.minutes/60*2)/2) : 1;
+                          newTasks.push({
+                            id: genId(), date: d, title: t.text,
+                            hour: null, duration: dur, priority: "mid",
+                            goalId: null, kind: "study", subjectId: t.subjectId, subjectTodoId: t.id,
+                          });
+                        }
+                      });
+                      if (newTasks.length) setTasks(ts => [...ts, ...newTasks]);
+                    }} style={{
+                      padding: "10px 14px", borderRadius: 8,
+                      background: inCount === selTodos.length ? C.accent : C.surfaceUp,
+                      border: `1px solid ${inCount > 0 ? C.accent : C.border}`,
+                      color: inCount === selTodos.length ? "#fff" : isPast ? C.textDim : C.text,
+                      fontFamily: font, fontSize: 13, cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 8,
+                    }}>
+                      <span style={{ flex: 1, textAlign: "left" }}>
+                        {dObj.getMonth() + 1}/{dObj.getDate()}({dayName})
+                      </span>
+                      {isTodayD && <span style={{ fontSize: 10, opacity: 0.85 }}>今日</span>}
+                      {inCount > 0 && <span style={{ fontSize: 11 }}>{inCount}/{selTodos.length}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <button onClick={() => setBulkDayPicker(false)}
+                  style={{ ...btn(false, C.textMid, { flex: 1, padding: "9px" }) }}>キャンセル</button>
+                <button onClick={() => { setBulkDayPicker(false); setSelectMode(false); setSelectedTodos([]); }}
+                  style={{ ...btn(true, C.accent, { flex: 1, padding: "9px" }) }}>完了</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
     </div>
   );
 }
@@ -2451,6 +2565,9 @@ function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeekl
   const [monthOffset, setMonthOffset] = useState(0); // 0 = this month, 1 = next, etc.
   const [collapsedSubjects, setCollapsedSubjects] = useState([]);
   const [weekPickerTodo, setWeekPickerTodo] = useState(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedTodos, setSelectedTodos] = useState([]);
+  const [bulkWeekPicker, setBulkWeekPicker] = useState(false);
   const today = todayStr();
   const toggleCollapse = (id) => setCollapsedSubjects(c => c.includes(id) ? c.filter(x => x !== id) : [...c, id]);
 
@@ -2516,7 +2633,34 @@ function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeekl
           return { subject: s, todoData, totalMin, doneMin, inWeek };
         }).filter(Boolean);
 
-        return subjectGroups.map(g => {
+        const allTodoIds = subjectGroups.flatMap(g => g.todoData.map(d => d.todo.id));
+
+        return (
+          <>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <button onClick={() => { setSelectMode(s => !s); setSelectedTodos([]); }}
+                style={{ ...btn(selectMode, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
+                {selectMode ? "✕ 選択終了" : "☑ 複数選択"}
+              </button>
+              {selectMode && (
+                <>
+                  <button onClick={() => setSelectedTodos(allTodoIds)}
+                    style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "5px 10px" }) }}>
+                    全選択
+                  </button>
+                  <div style={{ flex: 1, fontSize: 11, color: C.textMid, textAlign: "right" }}>
+                    {selectedTodos.length}件選択中
+                  </div>
+                  {selectedTodos.length > 0 && (
+                    <button onClick={() => setBulkWeekPicker(true)}
+                      style={{ ...btn(true, C.blue, { fontSize: 11, padding: "5px 10px" }) }}>
+                      📆 週に追加
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+            {subjectGroups.map(g => {
           const collapsed = collapsedSubjects.includes(g.subject.id);
           return (
           <div key={g.subject.id} style={{ ...card(), borderLeft: `4px solid ${g.subject.color}` }}>
@@ -2539,21 +2683,38 @@ function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeekl
                 {g.todoData.map(({ plan, todo }) => {
                   const st = todo.status || (todo.done ? "done" : "unwatched");
                   const isInWeek = g.inWeek(todo.id);
+                  const isSelected = selectedTodos.includes(todo.id);
                   return (
                     <div key={plan.id} style={{
                       display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
                       borderBottom: `1px solid ${C.border}`, opacity: st === "done" ? 0.55 : 1,
                     }}>
+                      {selectMode && (
+                        <button onClick={() => setSelectedTodos(sel =>
+                          sel.includes(todo.id) ? sel.filter(x => x !== todo.id) : [...sel, todo.id]
+                        )} style={{
+                          width: 22, height: 22, borderRadius: 4,
+                          border: `2px solid ${isSelected ? C.purple : C.border}`,
+                          background: isSelected ? C.purple : "transparent",
+                          color: "#fff", fontSize: 12, fontWeight: 700,
+                          cursor: "pointer", flexShrink: 0, padding: 0,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>{isSelected ? "✓" : ""}</button>
+                      )}
                       <span style={{ fontSize: 13, color: C.text, flex: 1, textDecoration: st === "done" ? "line-through" : "none" }}>
                         {todo.text}
                       </span>
                       {todo.minutes && <span style={{ fontSize: 11, color: g.subject.color }}>{fmtH(todo.minutes)}</span>}
-                      <button onClick={() => setWeekPickerTodo(todo)}
-                        style={{ ...btn(isInWeek, C.blue, { padding: "3px 8px", fontSize: 10 }) }}>
-                        {isInWeek ? "週次済" : "週次→"}
-                      </button>
-                      <button onClick={() => setMonthlyPlans(ps => ps.filter(p => p.id !== plan.id))}
-                        style={{ ...btn(false, C.red, { padding: "3px 6px", fontSize: 10 }) }}>✕</button>
+                      {!selectMode && (
+                        <>
+                          <button onClick={() => setWeekPickerTodo(todo)}
+                            style={{ ...btn(isInWeek, C.blue, { padding: "3px 8px", fontSize: 10 }) }}>
+                            {isInWeek ? "週次済" : "週次→"}
+                          </button>
+                          <button onClick={() => setMonthlyPlans(ps => ps.filter(p => p.id !== plan.id))}
+                            style={{ ...btn(false, C.red, { padding: "3px 6px", fontSize: 10 }) }}>✕</button>
+                        </>
+                      )}
                     </div>
                   );
                 })}
@@ -2561,7 +2722,9 @@ function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeekl
             )}
           </div>
           );
-        });
+        })}
+          </>
+        );
       })()}
 
       {/* Week picker modal */}
@@ -2622,6 +2785,77 @@ function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeekl
               </div>
               <button onClick={() => setWeekPickerTodo(null)}
                 style={{ ...btn(false, C.textMid, { width: "100%", padding: "9px", marginTop: 12 }) }}>閉じる</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Bulk week picker modal */}
+      {bulkWeekPicker && (() => {
+        const selTodos = subjectTodos.filter(t => selectedTodos.includes(t.id));
+        const totalMin = selTodos.reduce((s, t) => s + (t.minutes || 0), 0);
+        const fmtH = (m) => m >= 60 ? `${Math.floor(m/60)}h${m%60 ? (m%60)+"m" : ""}` : `${m}m`;
+        const fmtLocal = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+        const firstOfMonth = new Date(year, month, 1);
+        const firstMon = new Date(firstOfMonth);
+        firstMon.setDate(firstOfMonth.getDate() - ((firstOfMonth.getDay() + 6) % 7));
+        const today0 = new Date(today + "T00:00:00");
+        const weeks = Array.from({ length: 10 }, (_, i) => {
+          const wStart = new Date(firstMon);
+          wStart.setDate(firstMon.getDate() + i * 7);
+          const wEnd = new Date(wStart);
+          wEnd.setDate(wStart.getDate() + 6);
+          return { startStr: fmtLocal(wStart), wStart, wEnd, ended: wEnd < today0 };
+        }).filter(w => !w.ended);
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }} onClick={() => setBulkWeekPicker(false)}>
+            <div style={{ ...card({ maxWidth: 420, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column" }) }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontFamily: serif, fontSize: 16, color: C.text, marginBottom: 4 }}>週にまとめて追加</div>
+              <div style={{ fontSize: 12, color: C.accent, marginBottom: 12 }}>
+                {selTodos.length}件 / {fmtH(totalMin)}
+              </div>
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                {weeks.map(w => {
+                  const inCount = selTodos.filter(t => weeklyPlans.some(p => p.weekStart === w.startStr && p.todoId === t.id)).length;
+                  const wStartLabel = `${w.wStart.getMonth()+1}/${w.wStart.getDate()}`;
+                  const wEndLabel = `${w.wEnd.getMonth()+1}/${w.wEnd.getDate()}`;
+                  const isThisWeek = w.startStr === getWeekDates(today)[0];
+                  return (
+                    <button key={w.startStr} onClick={() => {
+                      const newPlans = [];
+                      selTodos.forEach(t => {
+                        if (!weeklyPlans.some(p => p.weekStart === w.startStr && p.todoId === t.id)) {
+                          newPlans.push({
+                            id: genId(), weekStart: w.startStr, todoId: t.id,
+                            subjectId: t.subjectId, createdAt: Date.now() + Math.random(),
+                          });
+                        }
+                      });
+                      if (newPlans.length) setWeeklyPlans(ps => [...ps, ...newPlans]);
+                    }} style={{
+                      padding: "10px 14px", borderRadius: 8,
+                      background: inCount === selTodos.length ? C.blue : C.surfaceUp,
+                      border: `1px solid ${inCount > 0 ? C.blue : C.border}`,
+                      color: inCount === selTodos.length ? "#fff" : C.text,
+                      fontFamily: font, fontSize: 13, cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 8,
+                    }}>
+                      <span style={{ flex: 1, textAlign: "left" }}>{wStartLabel}(月) 〜 {wEndLabel}(日)</span>
+                      {isThisWeek && <span style={{ fontSize: 10, opacity: 0.85 }}>今週</span>}
+                      {inCount > 0 && <span style={{ fontSize: 11 }}>{inCount}/{selTodos.length}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <button onClick={() => setBulkWeekPicker(false)}
+                  style={{ ...btn(false, C.textMid, { flex: 1, padding: "9px" }) }}>キャンセル</button>
+                <button onClick={() => { setBulkWeekPicker(false); setSelectMode(false); setSelectedTodos([]); }}
+                  style={{ ...btn(true, C.accent, { flex: 1, padding: "9px" }) }}>完了</button>
+              </div>
             </div>
           </div>
         );
