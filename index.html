@@ -3146,23 +3146,115 @@ function usePersistedState(key, initial) {
   return [state, setState];
 }
 
+// Workspace-aware persisted state: each workspace has its own data
+function useWorkspaceState(workspaceId, key, initial) {
+  const storageKey = `${workspaceId}_${key}`;
+  const [state, setState] = useState(() => {
+    try {
+      const raw = localStorage.getItem(`${STORAGE_KEY}_${storageKey}`);
+      return raw !== null ? JSON.parse(raw) : initial;
+    } catch {
+      return initial;
+    }
+  });
+  // Reload state when workspace changes
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`${STORAGE_KEY}_${storageKey}`);
+      setState(raw !== null ? JSON.parse(raw) : initial);
+    } catch {
+      setState(initial);
+    }
+  // eslint-disable-next-line
+  }, [workspaceId]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(`${STORAGE_KEY}_${storageKey}`, JSON.stringify(state));
+    } catch {}
+  }, [storageKey, state]);
+  return [state, setState];
+}
+
 function App() {
   const today = todayStr();
+
+  // Workspaces
+  const [workspaces, setWorkspaces] = usePersistedState("workspaces", [
+    { id: "ws_cpa", name: "CPA勉強", emoji: "📚" },
+    { id: "ws_hobby", name: "趣味勉強", emoji: "🎨" },
+  ]);
+  const [activeWs, setActiveWs] = usePersistedState("activeWs", "ws_cpa");
+  const [showWsMenu, setShowWsMenu] = useState(false);
+
+  // One-time migration: move legacy (non-workspaced) data into ws_cpa on first run
+  useEffect(() => {
+    const migrationKey = `${STORAGE_KEY}_migrated_v1`;
+    if (localStorage.getItem(migrationKey)) return;
+    const legacyKeys = ["tasks", "goals", "subjects", "subjectTodos", "monthlyPlans", "weeklyPlans", "settings"];
+    legacyKeys.forEach(k => {
+      const legacy = localStorage.getItem(`${STORAGE_KEY}_${k}`);
+      const wsKey = `${STORAGE_KEY}_ws_cpa_${k}`;
+      if (legacy !== null && !localStorage.getItem(wsKey)) {
+        localStorage.setItem(wsKey, legacy);
+      }
+    });
+    localStorage.setItem(migrationKey, "true");
+  }, []);
+
   const [view, setView] = useState("day");
   const [selectedDate, setSelectedDate] = useState(today);
-  const [tasks, setTasks] = usePersistedState("tasks", makeSampleTasks(today));
-  const [goals, setGoals] = usePersistedState("goals", SAMPLE_GOALS);
-  const [subjects, setSubjects] = usePersistedState("subjects", SAMPLE_SUBJECTS);
-  const [subjectTodos, setSubjectTodos] = usePersistedState("subjectTodos", SAMPLE_SUBJECT_TODOS);
-  const [monthlyPlans, setMonthlyPlans] = usePersistedState("monthlyPlans", []);
-  const [weeklyPlans, setWeeklyPlans] = usePersistedState("weeklyPlans", []);
-  const [settings, setSettings] = usePersistedState("settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答" });
+  const [tasks, setTasks] = useWorkspaceState(activeWs, "tasks", activeWs === "ws_cpa" ? makeSampleTasks(today) : []);
+  const [goals, setGoals] = useWorkspaceState(activeWs, "goals", activeWs === "ws_cpa" ? SAMPLE_GOALS : []);
+  const [subjects, setSubjects] = useWorkspaceState(activeWs, "subjects", activeWs === "ws_cpa" ? SAMPLE_SUBJECTS : []);
+  const [subjectTodos, setSubjectTodos] = useWorkspaceState(activeWs, "subjectTodos", activeWs === "ws_cpa" ? SAMPLE_SUBJECT_TODOS : []);
+  const [monthlyPlans, setMonthlyPlans] = useWorkspaceState(activeWs, "monthlyPlans", []);
+  const [weeklyPlans, setWeeklyPlans] = useWorkspaceState(activeWs, "weeklyPlans", []);
+  const [settings, setSettings] = useWorkspaceState(activeWs, "settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: activeWs === "ws_cpa" ? "短答" : "目標" });
   const [syncEmail, setSyncEmail] = usePersistedState("syncEmail", "");
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error
   const [lastSyncedAt, setLastSyncedAt] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const initialPulledRef = useRef(false);
   const lastPushedDataRef = useRef("");
+
+  // Helper: read all workspace data from localStorage
+  const collectAllWorkspaceData = () => {
+    const all = { workspaces, activeWs, data: {} };
+    workspaces.forEach(ws => {
+      const wsData = {};
+      ["tasks", "goals", "subjects", "subjectTodos", "monthlyPlans", "weeklyPlans", "settings"].forEach(k => {
+        try {
+          const raw = localStorage.getItem(`${STORAGE_KEY}_${ws.id}_${k}`);
+          if (raw !== null) wsData[k] = JSON.parse(raw);
+        } catch {}
+      });
+      all.data[ws.id] = wsData;
+    });
+    return all;
+  };
+
+  // Helper: write all workspace data into localStorage
+  const applyAllWorkspaceData = (all) => {
+    if (all.workspaces) setWorkspaces(all.workspaces);
+    if (all.data) {
+      Object.entries(all.data).forEach(([wsId, wsData]) => {
+        Object.entries(wsData).forEach(([k, v]) => {
+          try { localStorage.setItem(`${STORAGE_KEY}_${wsId}_${k}`, JSON.stringify(v)); } catch {}
+        });
+      });
+    }
+    // Re-apply current workspace's data to state
+    const cur = all.data && all.data[activeWs];
+    if (cur) {
+      if (cur.tasks) setTasks(cur.tasks);
+      if (cur.goals) setGoals(cur.goals);
+      if (cur.subjects) setSubjects(cur.subjects);
+      if (cur.subjectTodos) setSubjectTodos(cur.subjectTodos);
+      if (cur.monthlyPlans) setMonthlyPlans(cur.monthlyPlans);
+      if (cur.weeklyPlans) setWeeklyPlans(cur.weeklyPlans);
+      if (cur.settings) setSettings(cur.settings);
+    }
+  };
 
   // Pull from cloud on initial load if email is set
   useEffect(() => {
@@ -3172,13 +3264,19 @@ function App() {
     cloudPull(syncEmail).then(row => {
       if (row && row.data) {
         const d = row.data;
-        if (d.tasks) setTasks(d.tasks);
-        if (d.goals) setGoals(d.goals);
-        if (d.subjects) setSubjects(d.subjects);
-        if (d.subjectTodos) setSubjectTodos(d.subjectTodos);
-        if (d.monthlyPlans) setMonthlyPlans(d.monthlyPlans);
-        if (d.weeklyPlans) setWeeklyPlans(d.weeklyPlans);
-        if (d.settings) setSettings(d.settings);
+        // New format (multi-workspace) or legacy (single)
+        if (d.workspaces && d.data) {
+          applyAllWorkspaceData(d);
+        } else {
+          // Legacy single-workspace data → apply to current
+          if (d.tasks) setTasks(d.tasks);
+          if (d.goals) setGoals(d.goals);
+          if (d.subjects) setSubjects(d.subjects);
+          if (d.subjectTodos) setSubjectTodos(d.subjectTodos);
+          if (d.monthlyPlans) setMonthlyPlans(d.monthlyPlans);
+          if (d.weeklyPlans) setWeeklyPlans(d.weeklyPlans);
+          if (d.settings) setSettings(d.settings);
+        }
         setLastSyncedAt(Date.now());
       }
       setSyncStatus("synced");
@@ -3188,7 +3286,7 @@ function App() {
   // Push to cloud (debounced 3s) when data changes
   useEffect(() => {
     if (!syncEmail || !initialPulledRef.current) return;
-    const payload = { tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings };
+    const payload = collectAllWorkspaceData();
     const serialized = JSON.stringify(payload);
     if (serialized === lastPushedDataRef.current) return;
     const timer = setTimeout(() => {
@@ -3204,7 +3302,7 @@ function App() {
       });
     }, 3000);
     return () => clearTimeout(timer);
-  }, [syncEmail, tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings]);
+  }, [syncEmail, tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings, workspaces, activeWs]);
 
   // Manual pull
   const manualPull = async () => {
@@ -3213,13 +3311,17 @@ function App() {
     const row = await cloudPull(syncEmail);
     if (row && row.data) {
       const d = row.data;
-      if (d.tasks) setTasks(d.tasks);
-      if (d.goals) setGoals(d.goals);
-      if (d.subjects) setSubjects(d.subjects);
-      if (d.subjectTodos) setSubjectTodos(d.subjectTodos);
-      if (d.monthlyPlans) setMonthlyPlans(d.monthlyPlans);
-      if (d.weeklyPlans) setWeeklyPlans(d.weeklyPlans);
-      if (d.settings) setSettings(d.settings);
+      if (d.workspaces && d.data) {
+        applyAllWorkspaceData(d);
+      } else {
+        if (d.tasks) setTasks(d.tasks);
+        if (d.goals) setGoals(d.goals);
+        if (d.subjects) setSubjects(d.subjects);
+        if (d.subjectTodos) setSubjectTodos(d.subjectTodos);
+        if (d.monthlyPlans) setMonthlyPlans(d.monthlyPlans);
+        if (d.weeklyPlans) setWeeklyPlans(d.weeklyPlans);
+        if (d.settings) setSettings(d.settings);
+      }
       lastPushedDataRef.current = JSON.stringify(d);
       setLastSyncedAt(Date.now());
       setSyncStatus("synced");
@@ -3229,9 +3331,13 @@ function App() {
   };
 
   const resetAll = () => {
-    ["tasks", "goals", "subjects", "subjectTodos", "monthlyPlans", "weeklyPlans", "settings", "syncEmail"].forEach(k => {
-      try { localStorage.removeItem(`${STORAGE_KEY}_${k}`); } catch {}
-    });
+    // Clear ALL keys under our storage prefix
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(`${STORAGE_KEY}_`)) keysToRemove.push(k);
+    }
+    keysToRemove.forEach(k => { try { localStorage.removeItem(k); } catch {} });
     location.reload();
   };
 
@@ -3244,6 +3350,74 @@ function App() {
         gap: 10,
       }}>
         <div style={{ fontFamily: serif, fontSize: 20, color: C.accent, letterSpacing: 1 }}>DayFlow</div>
+        {/* Workspace switcher */}
+        <div style={{ position: "relative" }}>
+          <button onClick={() => setShowWsMenu(s => !s)} style={{
+            padding: "4px 10px", borderRadius: 12,
+            background: C.surfaceUp, border: `1px solid ${C.border}`,
+            fontFamily: font, fontSize: 12, fontWeight: 700, color: C.text,
+            cursor: "pointer", display: "flex", alignItems: "center", gap: 4,
+          }}>
+            <span>{(workspaces.find(w => w.id === activeWs) || workspaces[0])?.emoji}</span>
+            <span>{(workspaces.find(w => w.id === activeWs) || workspaces[0])?.name}</span>
+            <span style={{ fontSize: 9, color: C.textMid }}>▼</span>
+          </button>
+          {showWsMenu && (
+            <>
+              <div onClick={() => setShowWsMenu(false)} style={{ position: "fixed", inset: 0, zIndex: 50 }} />
+              <div style={{
+                position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 51,
+                background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+                padding: 4, minWidth: 180, boxShadow: "0 4px 16px #0002",
+              }}>
+                {workspaces.map(ws => (
+                  <div key={ws.id} style={{ display: "flex", alignItems: "center" }}>
+                    <button onClick={() => { setActiveWs(ws.id); setShowWsMenu(false); initialPulledRef.current = false; }}
+                      style={{
+                        flex: 1, padding: "8px 10px", borderRadius: 6, border: "none",
+                        background: ws.id === activeWs ? C.accent + "20" : "transparent",
+                        color: C.text, fontFamily: font, fontSize: 13, cursor: "pointer",
+                        textAlign: "left", display: "flex", alignItems: "center", gap: 6,
+                      }}>
+                      <span>{ws.emoji}</span><span style={{ flex: 1 }}>{ws.name}</span>
+                      {ws.id === activeWs && <span style={{ color: C.accent }}>✓</span>}
+                    </button>
+                    {workspaces.length > 1 && (
+                      <button onClick={() => {
+                        if (!confirm(`「${ws.name}」を削除しますか？このワークスペースのデータも全て削除されます。`)) return;
+                        ["tasks", "goals", "subjects", "subjectTodos", "monthlyPlans", "weeklyPlans", "settings"].forEach(k => {
+                          try { localStorage.removeItem(`${STORAGE_KEY}_${ws.id}_${k}`); } catch {}
+                        });
+                        const newWss = workspaces.filter(w => w.id !== ws.id);
+                        setWorkspaces(newWss);
+                        if (activeWs === ws.id) { setActiveWs(newWss[0].id); initialPulledRef.current = false; }
+                      }} style={{
+                        padding: "4px 6px", border: "none", background: "transparent",
+                        color: C.red, fontSize: 11, cursor: "pointer",
+                      }}>✕</button>
+                    )}
+                  </div>
+                ))}
+                <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 4, paddingTop: 4 }}>
+                  <button onClick={() => {
+                    const name = prompt("新しいワークスペース名を入力してください");
+                    if (!name || !name.trim()) return;
+                    const emoji = prompt("絵文字を入力（任意）", "📝") || "📝";
+                    const newWs = { id: `ws_${Date.now()}`, name: name.trim(), emoji };
+                    setWorkspaces(ws => [...ws, newWs]);
+                    setActiveWs(newWs.id);
+                    setShowWsMenu(false);
+                    initialPulledRef.current = false;
+                  }} style={{
+                    width: "100%", padding: "8px 10px", border: "none",
+                    background: "transparent", color: C.blue, fontFamily: font, fontSize: 12,
+                    cursor: "pointer", textAlign: "left", fontWeight: 700,
+                  }}>+ 新しいワークスペースを追加</button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
         {settings.examDate && (() => {
           const [yy, mm, dd] = settings.examDate.split("-").map(Number);
           const exam = new Date(yy, mm - 1, dd);
