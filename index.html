@@ -1467,9 +1467,9 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
 /* ══════════════════════════════════════════════════════
    SUBJECTS VIEW (科目別TODO)
 ══════════════════════════════════════════════════════ */
-function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeeklyPlans, tasks, setTasks, selectedDate, goals }) {
-  // Categories derived from subjects
-  const allCategories = [...new Set(subjects.map(s => s.category || "CPA勉強"))];
+function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeeklyPlans, tasks, setTasks, selectedDate, goals, subjectCategories, setSubjectCategories }) {
+  // Categories: persisted list, plus any from existing subjects
+  const allCategories = [...new Set([...(subjectCategories || ["CPA勉強"]), ...subjects.map(s => s.category || "CPA勉強")])];
   if (allCategories.length === 0) allCategories.push("CPA勉強");
   const [activeCategory, setActiveCategory] = useState(allCategories[0]);
   const categorySubjects = subjects.filter(s => (s.category || "CPA勉強") === activeCategory);
@@ -1696,23 +1696,46 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
       {/* Category tabs */}
       <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
-        {allCategories.map(cat => (
-          <button key={cat} onClick={() => setActiveCategory(cat)}
-            style={{
-              padding: "6px 14px", borderRadius: 14,
-              background: activeCategory === cat ? C.text : C.surface,
-              color: activeCategory === cat ? "#fff" : C.textMid,
-              border: `1px solid ${activeCategory === cat ? C.text : C.border}`,
-              fontSize: 12, fontFamily: font, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
-              flexShrink: 0,
-            }}>
-            {cat}
-          </button>
-        ))}
+        {allCategories.map(cat => {
+          const isActive = activeCategory === cat;
+          const subsInCat = subjects.filter(s => (s.category || "CPA勉強") === cat).length;
+          return (
+            <div key={cat} style={{ display: "flex", flexShrink: 0 }}>
+              <button onClick={() => setActiveCategory(cat)}
+                style={{
+                  padding: "6px 12px", borderRadius: subsInCat === 0 && allCategories.length > 1 ? "14px 0 0 14px" : 14,
+                  background: isActive ? C.text : C.surface,
+                  color: isActive ? "#fff" : C.textMid,
+                  border: `1px solid ${isActive ? C.text : C.border}`,
+                  fontSize: 12, fontFamily: font, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+                  borderRight: subsInCat === 0 && allCategories.length > 1 ? "none" : undefined,
+                }}>
+                {cat}
+              </button>
+              {subsInCat === 0 && allCategories.length > 1 && (
+                <button onClick={() => {
+                  if (!confirm(`カテゴリ「${cat}」を削除しますか？`)) return;
+                  setSubjectCategories(cs => (cs || []).filter(c => c !== cat));
+                  if (activeCategory === cat) setActiveCategory(allCategories.filter(c => c !== cat)[0]);
+                }} style={{
+                  padding: "6px 8px", borderRadius: "0 14px 14px 0",
+                  background: isActive ? C.text : C.surface,
+                  color: isActive ? "#fff" : C.red,
+                  border: `1px solid ${isActive ? C.text : C.border}`, borderLeft: "none",
+                  fontSize: 11, cursor: "pointer",
+                }}>✕</button>
+              )}
+            </div>
+          );
+        })}
         <button onClick={() => {
           const name = prompt("新しいカテゴリ名（例: 趣味勉強、資格、語学）");
           if (!name || !name.trim()) return;
-          setActiveCategory(name.trim());
+          const cleanName = name.trim();
+          if (!allCategories.includes(cleanName)) {
+            setSubjectCategories(cs => [...(cs || []), cleanName]);
+          }
+          setActiveCategory(cleanName);
         }} style={{
           padding: "6px 12px", borderRadius: 14, background: "transparent",
           color: C.blue, border: `1px dashed ${C.blue}`,
@@ -3210,6 +3233,7 @@ function App() {
   const [tasks, setTasks] = usePersistedState("tasks", makeSampleTasks(today));
   const [goals, setGoals] = usePersistedState("goals", SAMPLE_GOALS);
   const [subjects, setSubjects] = usePersistedState("subjects", SAMPLE_SUBJECTS);
+  const [subjectCategories, setSubjectCategories] = usePersistedState("subjectCategories", ["CPA勉強"]);
   const [subjectTodos, setSubjectTodos] = usePersistedState("subjectTodos", SAMPLE_SUBJECT_TODOS);
   const [monthlyPlans, setMonthlyPlans] = usePersistedState("monthlyPlans", []);
   const [weeklyPlans, setWeeklyPlans] = usePersistedState("weeklyPlans", []);
@@ -3238,6 +3262,7 @@ function App() {
         if (src.monthlyPlans) setMonthlyPlans(src.monthlyPlans);
         if (src.weeklyPlans) setWeeklyPlans(src.weeklyPlans);
         if (src.settings) setSettings(src.settings);
+        if (src.subjectCategories) setSubjectCategories(src.subjectCategories);
         setLastSyncedAt(Date.now());
       }
       setSyncStatus("synced");
@@ -3247,7 +3272,7 @@ function App() {
   // Push to cloud (debounced 3s) when data changes
   useEffect(() => {
     if (!syncEmail || !initialPulledRef.current) return;
-    const payload = { tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings };
+    const payload = { tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings, subjectCategories };
     const serialized = JSON.stringify(payload);
     if (serialized === lastPushedDataRef.current) return;
     const timer = setTimeout(() => {
@@ -3263,7 +3288,7 @@ function App() {
       });
     }, 3000);
     return () => clearTimeout(timer);
-  }, [syncEmail, tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings]);
+  }, [syncEmail, tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings, subjectCategories]);
 
   // Manual pull
   const manualPull = async () => {
@@ -3280,6 +3305,7 @@ function App() {
       if (src.monthlyPlans) setMonthlyPlans(src.monthlyPlans);
       if (src.weeklyPlans) setWeeklyPlans(src.weeklyPlans);
       if (src.settings) setSettings(src.settings);
+      if (src.subjectCategories) setSubjectCategories(src.subjectCategories);
       lastPushedDataRef.current = JSON.stringify(src);
       setLastSyncedAt(Date.now());
       setSyncStatus("synced");
@@ -3348,7 +3374,7 @@ function App() {
       <div style={{ flex: 1, overflowY: "auto" }}>
         {view === "day"    && <DayView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} goals={goals} subjects={subjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} settings={settings} />}
         {view === "review" && <ReviewView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} setView={setView} subjects={subjects} subjectTodos={subjectTodos} settings={settings} goals={goals} />}
-        {view === "subjects" && <SubjectsView subjects={subjects} setSubjects={setSubjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} goals={goals} />}
+        {view === "subjects" && <SubjectsView subjects={subjects} setSubjects={setSubjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} goals={goals} subjectCategories={subjectCategories} setSubjectCategories={setSubjectCategories} />}
         {view === "week"   && <WeekView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} />}
         {view === "month"  && <MonthView goals={goals} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} selectedDate={selectedDate} />}
         {view === "goals"  && <GoalsView goals={goals} setGoals={setGoals} subjects={subjects} />}
