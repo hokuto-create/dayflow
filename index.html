@@ -3278,6 +3278,21 @@ function App() {
   const today = todayStr();
   const [view, setView] = useState("day");
   const [selectedDate, setSelectedDate] = useState(today);
+
+  // When the app resumes (e.g. PWA reopened next day), reset selected date to today
+  useEffect(() => {
+    const checkAndReset = () => {
+      const now = todayStr();
+      setSelectedDate(prev => prev !== now ? now : prev);
+    };
+    const onVisible = () => { if (!document.hidden) checkAndReset(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", checkAndReset);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", checkAndReset);
+    };
+  }, []);
   const [tasks, setTasks] = usePersistedState("tasks", makeSampleTasks(today));
   const [goals, setGoals] = usePersistedState("goals", SAMPLE_GOALS);
   const [subjects, setSubjects] = usePersistedState("subjects", SAMPLE_SUBJECTS);
