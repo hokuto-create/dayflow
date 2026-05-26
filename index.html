@@ -79,6 +79,12 @@ const fmtTime = (h) => {
   return `${fmt2(hh)}:${mm}`;
 };
 
+const fmtDur = (d) => {
+  const h = Math.floor(d);
+  const m = Math.round((d - h) * 60);
+  return h === 0 ? `${m}分` : m === 0 ? `${h}時間` : `${h}時間${m}分`;
+};
+
 const DAYS_JA = ["日", "月", "火", "水", "木", "金", "土"];
 const MONTHS_JA = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
 
@@ -710,7 +716,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
                   }}>{t.title}</div>
                   <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
-                    {t.duration}時間
+                    {fmtDur(t.duration)}
                     {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
                     {t.isReview && <span style={{ color: C.yellow, marginLeft: 6, fontWeight: 700 }}>🔁 復習</span>}
                   </div>
@@ -953,7 +959,12 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                     </select>
                   ) : (
                     <select style={input()} value={form.duration} onChange={e => setForm(f => ({ ...f, duration: +e.target.value }))}>
-                      {[0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.5,3,4].map(d => <option key={d} value={d}>{d}時間</option>)}
+                      {[0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.5,3,4].map(d => {
+                        const h = Math.floor(d);
+                        const m = Math.round((d - h) * 60);
+                        const label = h === 0 ? `${m}分` : m === 0 ? `${h}時間` : `${h}時間${m}分`;
+                        return <option key={d} value={d}>{label}</option>;
+                      })}
                     </select>
                   )}
                 </div>
@@ -1056,7 +1067,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 {t.isReview && <span style={{ color: C.yellow, marginRight: 4 }}>🔁</span>}{t.title}
               </div>
               <div style={{ fontSize: 11, color: C.textMid, marginBottom: 12 }}>
-                {t.duration}時間
+                {fmtDur(t.duration)}
                 {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
               </div>
               <div style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
@@ -1106,7 +1117,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
             }} onClick={e => e.stopPropagation()}>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 4 }}>開始時間を選ぶ</div>
               <div style={{ fontSize: 11, color: C.textMid, marginBottom: 12 }}>
-                {form.duration}時間
+                {fmtDur(form.duration)}
               </div>
               <div style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
                 {Array.from({ length: (endH - startH) * 4 }, (_, i) => startH + i * 0.25).map(h => {
