@@ -702,7 +702,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                     style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>今日に</button>
                   <button onClick={() => askDeleteTask(t.id)}
                     style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
-                    {confirmDeleteTask === t.id ? "もう一度" : "✕"}
+                    {confirmDeleteTask === t.id ? "削除" : "✕"}
                   </button>
                 </div>
               );
@@ -749,7 +749,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>時間設定</button>
                 <button onClick={() => askDeleteTask(t.id)}
                   style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
-                  {confirmDeleteTask === t.id ? "もう一度" : "✕"}
+                  {confirmDeleteTask === t.id ? "削除" : "✕"}
                 </button>
               </div>
             );
@@ -840,7 +840,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   title="時間を外す" style={{ ...btn(false, C.yellow, { padding: "3px 7px", fontSize: 11 }) }}>⏱</button>
                 <button onClick={() => startEdit(t)} style={{ ...btn(false, C.blue, { padding: "3px 8px", fontSize: 11, minWidth: 28 }) }}>編集</button>
                 <button onClick={() => askDeleteTask(t.id)} style={{ ...btn(confirmDeleteTask === t.id, C.red, { padding: "3px 8px", fontSize: 11, minWidth: 28 }) }}>
-                  {confirmDeleteTask === t.id ? "もう一度" : "✕"}
+                  {confirmDeleteTask === t.id ? "削除" : "✕"}
                 </button>
               </div>
             </div>
@@ -2736,7 +2736,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                           setTimeout(() => setConfirmDelete(cd => cd === t.id ? null : cd), 3000);
                         }
                       }} style={{ ...btn(confirmDelete === t.id, C.red, { padding: "4px 8px", fontSize: 11, lineHeight: 1 }) }}>
-                        {confirmDelete === t.id ? "もう一度" : "✕"}
+                        {confirmDelete === t.id ? "削除" : "✕"}
                       </button>
                       <button onClick={() => toggleExpanded(t.id)} title="例題を表示"
                         style={{ ...btn(expanded || hasChildren, C.textMid, { padding: "4px 10px", fontSize: 12, lineHeight: 1, fontWeight: 700 }) }}>
@@ -2906,7 +2906,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                 }
                               }}
                                 style={{ ...btn(confirmDelete === c.id, C.red, { padding: "2px 7px", fontSize: 10, lineHeight: 1 }) }}>
-                                {confirmDelete === c.id ? "もう一度" : "✕"}
+                                {confirmDelete === c.id ? "削除" : "✕"}
                               </button>
                             </>
                           )}
