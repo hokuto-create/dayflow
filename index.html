@@ -75,7 +75,7 @@ const todayStr = () => new Date().toISOString().split("T")[0];
 const fmt2 = (n) => String(n).padStart(2, "0");
 const fmtTime = (h) => {
   const hh = Math.floor(h);
-  const mm = (h % 1) === 0.5 ? "30" : "00";
+  const mm = String(Math.round((h - hh) * 60)).padStart(2, "0");
   return `${fmt2(hh)}:${mm}`;
 };
 
@@ -926,9 +926,9 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>開始時間</div>
                   <select style={input()} value={form.hour} onChange={e => setForm(f => ({ ...f, hour: +e.target.value }))}>
-                    {Array.from({ length: 60 }, (_, i) => i * 0.5).map(h => {
+                    {Array.from({ length: 120 }, (_, i) => i * 0.25).map(h => {
                       const hh = Math.floor(h);
-                      const mm = h % 1 === 0.5 ? "30" : "00";
+                      const mm = String(Math.round((h - hh) * 60)).padStart(2, "0");
                       return <option key={h} value={h}>{fmt2(hh)}:{mm}</option>;
                     })}
                   </select>
@@ -940,18 +940,18 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   {form.kind === "other" ? (
                     <select style={input()}
                       value={form.hour + form.duration}
-                      onChange={e => setForm(f => ({ ...f, duration: Math.max(0.5, +e.target.value - f.hour) }))}>
-                      {Array.from({ length: 60 }, (_, i) => 0.5 + i * 0.5)
+                      onChange={e => setForm(f => ({ ...f, duration: Math.max(0.25, +e.target.value - f.hour) }))}>
+                      {Array.from({ length: 120 }, (_, i) => 0.25 + i * 0.25)
                         .filter(h => h > form.hour)
                         .map(h => {
                           const hh = Math.floor(h);
-                          const mm = h % 1 === 0.5 ? "30" : "00";
+                          const mm = String(Math.round((h - hh) * 60)).padStart(2, "0");
                           return <option key={h} value={h}>{fmt2(hh)}:{mm}</option>;
                         })}
                     </select>
                   ) : (
                     <select style={input()} value={form.duration} onChange={e => setForm(f => ({ ...f, duration: +e.target.value }))}>
-                      {[0.5,1,1.5,2,2.5,3,4].map(d => <option key={d} value={d}>{d}時間</option>)}
+                      {[0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.5,3,4].map(d => <option key={d} value={d}>{d}時間</option>)}
                     </select>
                   )}
                 </div>
@@ -1058,7 +1058,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
               </div>
               <div style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
-                {Array.from({ length: (endH - startH) * 2 }, (_, i) => startH + i * 0.5).map(h => {
+                {Array.from({ length: (endH - startH) * 4 }, (_, i) => startH + i * 0.25).map(h => {
                   const free = isFree(h, t.duration);
                   return (
                     <button key={h} disabled={!free}
