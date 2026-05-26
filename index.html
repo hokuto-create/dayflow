@@ -80,8 +80,9 @@ const fmtTime = (h) => {
 };
 
 const fmtDur = (d) => {
-  const h = Math.floor(d);
-  const m = Math.round((d - h) * 60);
+  const totalMin = Math.round(d * 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
   return h === 0 ? `${m}分` : m === 0 ? `${h}時間` : `${h}時間${m}分`;
 };
 
@@ -583,7 +584,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       if (task.subjectTodoId) {
         const todo = subjectTodos.find(x => x.id === task.subjectTodoId);
         if (todo && todo.minutes) {
-          reviewDur = Math.max(0.25, Math.round(todo.minutes / 60 * 4) / 4);
+          reviewDur = Math.max(1/60, todo.minutes / 60);
         }
       }
       setTasks(ts => [...ts, {
@@ -731,47 +732,18 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 border: `1px solid ${t.isReview ? C.yellow + "50" : C.border}`,
                 marginBottom: 6,
               }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div onClick={() => setScheduleModal(t)} style={{
-                    fontSize: 13, color: C.text, fontWeight: 500,
+                <div onClick={() => setScheduleModal(t)} style={{
+                  flex: 1, cursor: "pointer", minWidth: 0,
+                }}>
+                  <div style={{ fontSize: 13, color: C.text, fontWeight: 500,
                     textDecoration: t.done ? "line-through" : "none",
-                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                    cursor: "pointer",
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
                   }}>{t.title}</div>
-                  <div style={{ fontSize: 10, color: C.textMid, marginTop: 1, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    <button onClick={() => setDurationEditId(t.id)}
-                      style={{
-                        padding: "2px 8px", borderRadius: 4,
-                        background: durationEditId === t.id ? C.accent : C.surfaceUp,
-                        border: `1px solid ${durationEditId === t.id ? C.accent : C.border}`,
-                        color: durationEditId === t.id ? "#fff" : C.text,
-                        fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: font,
-                      }}>⏱ {fmtDur(t.duration)}</button>
-                    {subjData && <span style={{ color: subjData.color }}>📚 {subjData.name}</span>}
-                    {t.isReview && <span style={{ color: C.yellow, fontWeight: 700 }}>🔁 復習</span>}
+                  <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
+                    {fmtDur(t.duration)}
+                    {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
+                    {t.isReview && <span style={{ color: C.yellow, marginLeft: 6, fontWeight: 700 }}>🔁 復習</span>}
                   </div>
-                  {durationEditId === t.id && (
-                    <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
-                      {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3].map(d => (
-                        <button key={d} onClick={() => {
-                          setTasks(ts => ts.map(x => x.id === t.id ? { ...x, duration: d } : x));
-                          setDurationEditId(null);
-                        }} style={{
-                          padding: "4px 8px", borderRadius: 4,
-                          background: t.duration === d ? C.accent : C.surface,
-                          border: `1px solid ${t.duration === d ? C.accent : C.border}`,
-                          color: t.duration === d ? "#fff" : C.text,
-                          fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: font,
-                        }}>{fmtDur(d)}</button>
-                      ))}
-                      <button onClick={() => setDurationEditId(null)}
-                        style={{
-                          padding: "4px 8px", borderRadius: 4,
-                          background: "transparent", border: `1px solid ${C.border}`,
-                          color: C.textMid, fontSize: 11, cursor: "pointer", fontFamily: font,
-                        }}>閉じる</button>
-                    </div>
-                  )}
                 </div>
                 <button onClick={() => setScheduleModal(t)}
                   style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>時間設定</button>
@@ -1020,9 +992,10 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                     </select>
                   ) : (
                     <select style={input()} value={form.duration} onChange={e => setForm(f => ({ ...f, duration: +e.target.value }))}>
-                      {[0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.5,3,4].map(d => {
-                        const h = Math.floor(d);
-                        const m = Math.round((d - h) * 60);
+                      {[5/60, 10/60, 0.25, 20/60, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4].map(d => {
+                        const totalMin = Math.round(d * 60);
+                        const h = Math.floor(totalMin / 60);
+                        const m = totalMin % 60;
                         const label = h === 0 ? `${m}分` : m === 0 ? `${h}時間` : `${h}時間${m}分`;
                         return <option key={d} value={d}>{label}</option>;
                       })}
@@ -1113,8 +1086,38 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       {scheduleModal && (() => {
         const t = scheduleModal;
         const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
-        // Find empty slots
-        const isFree = (h, dur) => !dayTasks.some(x => x.hour < h + dur && x.hour + x.duration > h);
+        // New overlap rule: any 15-min slot can hold at most 15 minutes total.
+        // A task of length `dur` starting at `h` fills [h, h+dur).
+        // For each 15-min slot [s, s+0.25] that overlaps the task,
+        // compute the overlap from existing tasks + this task; must be <= 0.25h.
+        const SLOT = 0.25;
+        const overlapInSlot = (taskStart, taskEnd, slotStart) => {
+          const slotEnd = slotStart + SLOT;
+          const a = Math.max(taskStart, slotStart);
+          const b = Math.min(taskEnd, slotEnd);
+          return Math.max(0, b - a);
+        };
+        const isFree = (h, dur) => {
+          const taskEnd = h + dur;
+          // Iterate over each slot the proposed task touches
+          // Use floor to nearest 15-min boundary
+          const firstSlot = Math.floor(h / SLOT) * SLOT;
+          for (let s = firstSlot; s < taskEnd; s += SLOT) {
+            const existingInSlot = dayTasks
+              .filter(x => x.id !== t.id)
+              .reduce((sum, x) => sum + overlapInSlot(x.hour, x.hour + x.duration, s), 0);
+            const proposedInSlot = overlapInSlot(h, taskEnd, s);
+            // Use small epsilon for FP safety
+            if (existingInSlot + proposedInSlot > SLOT + 0.0001) return false;
+          }
+          return true;
+        };
+        // Duration adjustment (15-min increments in UI)
+        const adjustDur = (delta) => {
+          const next = Math.max(0.25, Math.round((t.duration + delta) * 4) / 4);
+          setTasks(ts => ts.map(x => x.id === t.id ? { ...x, duration: next } : x));
+          setScheduleModal(sm => sm ? { ...sm, duration: next } : sm);
+        };
         return (
           <div style={{
             position: "fixed", inset: 0, background: "#0008", zIndex: 100,
@@ -1124,12 +1127,24 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               ...card({ maxWidth: 380, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column" })
             }} onClick={e => e.stopPropagation()}>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 4 }}>時間を選ぶ</div>
-              <div style={{ fontSize: 14, color: C.text, marginBottom: 2 }}>
+              <div style={{ fontSize: 14, color: C.text, marginBottom: 6 }}>
                 {t.isReview && <span style={{ color: C.yellow, marginRight: 4 }}>🔁</span>}{t.title}
               </div>
-              <div style={{ fontSize: 11, color: C.textMid, marginBottom: 12 }}>
-                {fmtDur(t.duration)}
-                {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
+              {/* Duration adjuster */}
+              <div style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "8px 10px", background: C.surfaceUp, borderRadius: 6, marginBottom: 10,
+              }}>
+                <span style={{ fontSize: 11, color: C.textMid }}>所要時間:</span>
+                <button onClick={() => adjustDur(-0.25)}
+                  style={{ ...btn(false, C.textMid, { padding: "4px 10px", fontSize: 14, lineHeight: 1 }) }}>−</button>
+                <span style={{
+                  fontSize: 13, fontWeight: 700, color: C.text,
+                  minWidth: 70, textAlign: "center",
+                }}>{fmtDur(t.duration)}</span>
+                <button onClick={() => adjustDur(0.25)}
+                  style={{ ...btn(false, C.textMid, { padding: "4px 10px", fontSize: 14, lineHeight: 1 }) }}>＋</button>
+                {subjData && <span style={{ color: subjData.color, fontSize: 11, marginLeft: "auto" }}>📚 {subjData.name}</span>}
               </div>
               <div style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
                 {Array.from({ length: (endH - startH) * 4 }, (_, i) => startH + i * 0.25).map(h => {
@@ -1164,10 +1179,27 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
 
       {/* Hour picker modal for form start time (grid UI like scheduleModal) */}
       {hourPickerOpen && (() => {
-        // Exclude current edit task from collision check
-        const isFree = (h) => !dayTasks.some(x =>
-          x.id !== editId && x.hour < h + (form.duration || 0.5) && x.hour + x.duration > h
-        );
+        // New overlap rule: any 15-min slot can hold at most 15 min total
+        const SLOT = 0.25;
+        const overlapInSlot = (taskStart, taskEnd, slotStart) => {
+          const slotEnd = slotStart + SLOT;
+          const a = Math.max(taskStart, slotStart);
+          const b = Math.min(taskEnd, slotEnd);
+          return Math.max(0, b - a);
+        };
+        const dur = form.duration || 0.5;
+        const isFree = (h) => {
+          const taskEnd = h + dur;
+          const firstSlot = Math.floor(h / SLOT) * SLOT;
+          for (let s = firstSlot; s < taskEnd; s += SLOT) {
+            const existingInSlot = dayTasks
+              .filter(x => x.id !== editId)
+              .reduce((sum, x) => sum + overlapInSlot(x.hour, x.hour + x.duration, s), 0);
+            const proposedInSlot = overlapInSlot(h, taskEnd, s);
+            if (existingInSlot + proposedInSlot > SLOT + 0.0001) return false;
+          }
+          return true;
+        };
         return (
           <div style={{
             position: "fixed", inset: 0, background: "#0008", zIndex: 110,
@@ -2015,7 +2047,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       // Compute review duration: if todo has children (parent), use parent+children sum; else use todo.minutes
       const childMin = subjectTodos.filter(c => c.parentId === todo.id).reduce((s, c) => s + (c.minutes || 0), 0);
       const totalMin = (todo.minutes || 0) + childMin;
-      const reviewDur = totalMin ? Math.max(0.25, Math.round(totalMin / 60 * 4) / 4) : 1;
+      const reviewDur = totalMin ? Math.max(1/60, totalMin / 60) : 1;
       if (existingReview) {
         // Update existing review date and duration
         setTasks(ts => ts.map(t => t.id === existingReview.id ? { ...t, date: reviewDate, duration: reviewDur } : t));
@@ -2076,7 +2108,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const todoDuration = (todo) => {
     const m = totalMinutesOf(todo);
     if (!m) return 1;
-    return Math.max(0.25, Math.round(m / 60 * 4) / 4);
+    return Math.max(1/60, m / 60);
   };
 
   const sendToToday = (todo) => {
@@ -3293,7 +3325,7 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                       if (isIn) return;
                       const childMin = subjectTodos.filter(c => c.parentId === todo.id).reduce((s, c) => s + (c.minutes || 0), 0);
                       const totalMin = (todo.minutes || 0) + childMin;
-                      const dur = totalMin ? Math.max(0.25, Math.round(totalMin / 60 * 4) / 4) : 1;
+                      const dur = totalMin ? Math.max(1/60, totalMin / 60) : 1;
                       setTasks(ts => [...ts, {
                         id: genId(), date: d, title: todo.text,
                         hour: null, duration: dur, priority: "medium",
@@ -3356,7 +3388,7 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                         if (!tasks.some(task => task.date === d && task.subjectTodoId === t.id)) {
                           const childMin = subjectTodos.filter(c => c.parentId === t.id).reduce((s, c) => s + (c.minutes || 0), 0);
                           const totalMin = (t.minutes || 0) + childMin;
-                          const dur = totalMin ? Math.max(0.25, Math.round(totalMin / 60 * 4) / 4) : 1;
+                          const dur = totalMin ? Math.max(1/60, totalMin / 60) : 1;
                           newTasks.push({
                             id: genId(), date: d, title: t.text,
                             hour: null, duration: dur, priority: "mid",
