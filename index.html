@@ -525,6 +525,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [understandingModal, setUnderstandingModal] = useState(null); // task being completed
   const [scheduleModal, setScheduleModal] = useState(null); // unscheduled task to schedule
   const [hourPickerOpen, setHourPickerOpen] = useState(false); // grid picker for form's start time
+  const [examplesModal, setExamplesModal] = useState(null); // task whose examples (children) to show
 
   const dayTasks = tasks.filter(t => t.date === selectedDate && t.hour != null).sort((a, b) => a.hour - b.hour);
   const unscheduledTasks = tasks.filter(t => t.date === selectedDate && t.hour == null);
@@ -768,7 +769,11 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           const top = startIdx * 44 + fracOffset + 4;
           const height = t.duration * 44 - 8;
           return (
-            <div key={t.id} style={{
+            <div key={t.id} onClick={(e) => {
+              // Don't open modal if clicking action buttons
+              if (e.target.tagName === "BUTTON" || e.target.closest("button")) return;
+              if (t.subjectTodoId) setExamplesModal(t);
+            }} style={{
               position: "absolute", top, left: 52, right: 8, height,
               background: t.kind === "other" ? "#ececec" : t.isReview ? "#fff5e6" : "#fbeee4",
               border: `1px solid ${t.kind === "other" ? "#bfbfbf" : t.isReview ? C.yellow : C.accentSoft}`,
@@ -776,6 +781,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               display: "flex", alignItems: "center", gap: 8,
               boxSizing: "border-box",
               zIndex: 2,
+              cursor: t.subjectTodoId ? "pointer" : "default",
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text, textDecoration: t.done ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -1146,6 +1152,168 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 style={{ ...btn(false, C.textMid, { width: "100%", marginTop: 12, padding: "8px" }) }}>
                 キャンセル
               </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Examples (子TODO) modal — open when tapping a task linked to a subject TODO */}
+      {examplesModal && (() => {
+        const t = examplesModal;
+        const parentTodo = subjectTodos.find(x => x.id === t.subjectTodoId);
+        if (!parentTodo) {
+          // Auto-close if parent not found
+          return null;
+        }
+        const subjData = subjects.find(s => s.id === parentTodo.subjectId);
+        const children = subjectTodos.filter(x => x.parentId === parentTodo.id)
+          .sort((a, b) => a.createdAt - b.createdAt);
+        const setChildStatus = (id, status) => {
+          setSubjectTodos(ts => ts.map(x => x.id === id ? { ...x, status, done: status === "done" } : x));
+        };
+        const setChildUnderstanding = (id, level) => {
+          setSubjectTodos(ts => ts.map(x => x.id === id
+            ? { ...x, understanding: level, status: x.status === "unwatched" ? "reviewing" : x.status }
+            : x));
+        };
+        const setParentStatus = (status) => {
+          setSubjectTodos(ts => ts.map(x => x.id === parentTodo.id ? { ...x, status, done: status === "done" } : x));
+        };
+        const setParentUnderstanding = (level) => {
+          setSubjectTodos(ts => ts.map(x => x.id === parentTodo.id
+            ? { ...x, understanding: level, status: x.status === "unwatched" ? "reviewing" : x.status }
+            : x));
+        };
+        const pst = parentTodo.status || (parentTodo.done ? "done" : "unwatched");
+        const accent = subjData?.color || C.accent;
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 110,
+            display: "flex", alignItems: "flex-end", justifyContent: "center",
+          }} onClick={() => setExamplesModal(null)}>
+            <div style={{
+              background: C.surface, borderRadius: "12px 12px 0 0",
+              maxWidth: 560, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column",
+              boxShadow: "0 -4px 20px #0003",
+            }} onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div style={{ padding: "16px 16px 12px", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: C.textMid, marginBottom: 2 }}>
+                      {fmtTime(t.hour)}〜{fmtTime(t.hour + t.duration)}
+                      {subjData && <span style={{ marginLeft: 8, color: accent, fontWeight: 700 }}>📚 {subjData.name}</span>}
+                    </div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{parentTodo.text}</div>
+                  </div>
+                  <button onClick={() => setExamplesModal(null)}
+                    style={{ ...btn(false, C.textMid, { padding: "4px 10px", fontSize: 12 }) }}>✕</button>
+                </div>
+                {/* Parent video status */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, color: C.textMid }}>動画:</span>
+                  {[
+                    ["unwatched", "未視聴", C.textDim],
+                    ["reviewing", "復習中", C.yellow],
+                    ["done", "視聴済", accent],
+                  ].map(([st, lbl, col]) => (
+                    <button key={st} onClick={() => setParentStatus(st)}
+                      style={{
+                        padding: "5px 10px", borderRadius: 5,
+                        background: pst === st ? col : "transparent",
+                        border: `1px solid ${pst === st ? col : C.border}`,
+                        color: pst === st ? "#fff" : C.textMid,
+                        fontSize: 11, fontFamily: font, fontWeight: 600, cursor: "pointer",
+                      }}>{lbl}</button>
+                  ))}
+                  {(pst === "reviewing" || pst === "done") && (
+                    <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
+                      {[
+                        [1, "✕", C.red, "わからない"],
+                        [2, "△", C.yellow, "あやふや"],
+                        [3, "○", C.blue, "一応"],
+                        [4, "◎", C.green, "万全"],
+                      ].map(([lv, mark, col, lbl]) => (
+                        <button key={lv} onClick={() => setParentUnderstanding(parentTodo.understanding === lv ? null : lv)}
+                          title={lbl}
+                          style={{
+                            width: 28, height: 28, borderRadius: 5,
+                            background: parentTodo.understanding === lv ? col : "transparent",
+                            border: `1px solid ${parentTodo.understanding === lv ? col : C.border}`,
+                            color: parentTodo.understanding === lv ? "#fff" : C.textDim,
+                            fontSize: 12, fontWeight: 700, cursor: "pointer",
+                            padding: 0, lineHeight: 1, fontFamily: font,
+                          }}>{mark}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              {/* Children list */}
+              <div style={{ overflowY: "auto", padding: 16 }}>
+                {children.length === 0 ? (
+                  <div style={{ padding: 20, textAlign: "center", color: C.textDim, fontSize: 12 }}>
+                    この章には例題が登録されていません<br />
+                    <span style={{ fontSize: 11 }}>「科目」画面から追加できます</span>
+                  </div>
+                ) : (
+                  children.map(c => {
+                    const cst = c.status || (c.done ? "done" : "unwatched");
+                    const cycleC = () => {
+                      const next = cst === "unwatched" ? "reviewing" : cst === "reviewing" ? "done" : "unwatched";
+                      setChildStatus(c.id, next);
+                    };
+                    const cInfo = {
+                      unwatched: { bg: "transparent", color: C.textDim, border: C.border, mark: "" },
+                      reviewing: { bg: C.yellow, color: "#fff", border: C.yellow, mark: "◐" },
+                      done: { bg: accent, color: "#fff", border: accent, mark: "✓" },
+                    }[cst];
+                    return (
+                      <div key={c.id} style={{
+                        padding: "10px 0", borderBottom: `1px solid ${C.border}`,
+                        opacity: cst === "done" ? 0.65 : 1,
+                      }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <button onClick={cycleC} style={{
+                            width: 30, height: 30, borderRadius: "50%",
+                            border: `2px solid ${cInfo.border}`, background: cInfo.bg,
+                            color: cInfo.color, fontSize: 14, fontWeight: 700, cursor: "pointer",
+                            flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                            padding: 0,
+                          }}>{cInfo.mark}</button>
+                          <span style={{
+                            flex: 1, fontSize: 14,
+                            color: cst === "done" ? C.textMid : C.text,
+                            textDecoration: cst === "done" ? "line-through" : "none",
+                          }}>{c.text}</span>
+                          {c.minutes ? <span style={{ fontSize: 11, color: accent, fontWeight: 600 }}>{c.minutes}m</span> : null}
+                        </div>
+                        {(cst === "reviewing" || cst === "done") && (
+                          <div style={{ display: "flex", gap: 5, marginTop: 6, marginLeft: 40 }}>
+                            {[
+                              [1, "✕", C.red, "わからない"],
+                              [2, "△", C.yellow, "あやふや"],
+                              [3, "○", C.blue, "一応"],
+                              [4, "◎", C.green, "万全"],
+                            ].map(([lv, mark, col, lbl]) => (
+                              <button key={lv} onClick={() => setChildUnderstanding(c.id, c.understanding === lv ? null : lv)}
+                                title={lbl}
+                                style={{
+                                  width: 32, height: 32, borderRadius: 6,
+                                  background: c.understanding === lv ? col : "transparent",
+                                  border: `1px solid ${c.understanding === lv ? col : C.border}`,
+                                  color: c.understanding === lv ? "#fff" : C.textDim,
+                                  fontSize: 14, fontWeight: 700, cursor: "pointer",
+                                  padding: 0, lineHeight: 1, fontFamily: font,
+                                }}>{mark}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </div>
         );
