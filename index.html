@@ -518,6 +518,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [showBulk, setShowBulk] = useState(false);
   const [understandingModal, setUnderstandingModal] = useState(null); // task being completed
   const [scheduleModal, setScheduleModal] = useState(null); // unscheduled task to schedule
+  const [hourPickerOpen, setHourPickerOpen] = useState(false); // grid picker for form's start time
 
   const dayTasks = tasks.filter(t => t.date === selectedDate && t.hour != null).sort((a, b) => a.hour - b.hour);
   const unscheduledTasks = tasks.filter(t => t.date === selectedDate && t.hour == null);
@@ -925,13 +926,14 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               <div style={{ display: "flex", gap: 8 }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>開始時間</div>
-                  <select style={input()} value={form.hour} onChange={e => setForm(f => ({ ...f, hour: +e.target.value }))}>
-                    {Array.from({ length: 120 }, (_, i) => i * 0.25).map(h => {
-                      const hh = Math.floor(h);
-                      const mm = String(Math.round((h - hh) * 60)).padStart(2, "0");
-                      return <option key={h} value={h}>{fmt2(hh)}:{mm}</option>;
-                    })}
-                  </select>
+                  <button type="button" onClick={() => setHourPickerOpen(true)}
+                    style={{
+                      ...input(), textAlign: "left", cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                    }}>
+                    <span>{fmtTime(form.hour)}</span>
+                    <span style={{ color: C.textMid, fontSize: 10 }}>▼</span>
+                  </button>
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>
@@ -1080,6 +1082,56 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 })}
               </div>
               <button onClick={() => setScheduleModal(null)}
+                style={{ ...btn(false, C.textMid, { width: "100%", marginTop: 12, padding: "8px" }) }}>
+                キャンセル
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Hour picker modal for form start time (grid UI like scheduleModal) */}
+      {hourPickerOpen && (() => {
+        // Exclude current edit task from collision check
+        const isFree = (h) => !dayTasks.some(x =>
+          x.id !== editId && x.hour < h + (form.duration || 0.5) && x.hour + x.duration > h
+        );
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 110,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+          }} onClick={() => setHourPickerOpen(false)}>
+            <div style={{
+              ...card({ maxWidth: 380, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column" })
+            }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 4 }}>開始時間を選ぶ</div>
+              <div style={{ fontSize: 11, color: C.textMid, marginBottom: 12 }}>
+                {form.duration}時間
+              </div>
+              <div style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+                {Array.from({ length: (endH - startH) * 4 }, (_, i) => startH + i * 0.25).map(h => {
+                  const free = isFree(h);
+                  const selected = form.hour === h;
+                  return (
+                    <button key={h} disabled={!free}
+                      onClick={() => {
+                        setForm(f => ({ ...f, hour: h }));
+                        setHourPickerOpen(false);
+                      }}
+                      style={{
+                        padding: "8px 4px", borderRadius: 6,
+                        background: selected ? C.accent : free ? C.surfaceUp : "#f3e6e6",
+                        border: `1px solid ${selected ? C.accent : free ? C.border : C.red + "40"}`,
+                        color: selected ? "#fff" : free ? C.text : C.textDim,
+                        fontFamily: font, fontSize: 12, fontWeight: 600,
+                        cursor: free ? "pointer" : "not-allowed",
+                      }}>
+                      {fmtTime(h)}
+                    </button>
+                  );
+                })}
+              </div>
+              <button onClick={() => setHourPickerOpen(false)}
                 style={{ ...btn(false, C.textMid, { width: "100%", marginTop: 12, padding: "8px" }) }}>
                 キャンセル
               </button>
