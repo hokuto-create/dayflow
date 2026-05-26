@@ -526,6 +526,16 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [scheduleModal, setScheduleModal] = useState(null); // unscheduled task to schedule
   const [hourPickerOpen, setHourPickerOpen] = useState(false); // grid picker for form's start time
   const [examplesModal, setExamplesModal] = useState(null); // task whose examples (children) to show
+  const [confirmDeleteTask, setConfirmDeleteTask] = useState(null);
+  const askDeleteTask = (id) => {
+    if (confirmDeleteTask === id) {
+      deleteTask(id);
+      setConfirmDeleteTask(null);
+    } else {
+      setConfirmDeleteTask(id);
+      setTimeout(() => setConfirmDeleteTask(cd => cd === id ? null : cd), 3000);
+    }
+  };
 
   const dayTasks = tasks.filter(t => t.date === selectedDate && t.hour != null).sort((a, b) => a.hour - b.hour);
   const unscheduledTasks = tasks.filter(t => t.date === selectedDate && t.hour == null);
@@ -679,8 +689,10 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   </div>
                   <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null } : x))}
                     style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>今日に</button>
-                  <button onClick={() => deleteTask(t.id)}
-                    style={{ ...btn(false, C.red, { fontSize: 10, padding: "3px 6px" }) }}>✕</button>
+                  <button onClick={() => askDeleteTask(t.id)}
+                    style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
+                    {confirmDeleteTask === t.id ? "もう一度" : "✕"}
+                  </button>
                 </div>
               );
             })}
@@ -724,8 +736,10 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 </div>
                 <button onClick={() => setScheduleModal(t)}
                   style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>時間設定</button>
-                <button onClick={() => deleteTask(t.id)}
-                  style={{ ...btn(false, C.red, { fontSize: 10, padding: "3px 6px" }) }}>✕</button>
+                <button onClick={() => askDeleteTask(t.id)}
+                  style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
+                  {confirmDeleteTask === t.id ? "もう一度" : "✕"}
+                </button>
               </div>
             );
           })}
@@ -814,7 +828,9 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, hour: null } : x))}
                   title="時間を外す" style={{ ...btn(false, C.yellow, { padding: "3px 7px", fontSize: 11 }) }}>⏱</button>
                 <button onClick={() => startEdit(t)} style={{ ...btn(false, C.blue, { padding: "3px 8px", fontSize: 11, minWidth: 28 }) }}>編集</button>
-                <button onClick={() => deleteTask(t.id)} style={{ ...btn(false, C.red, { padding: "3px 8px", fontSize: 11, minWidth: 28 }) }}>✕</button>
+                <button onClick={() => askDeleteTask(t.id)} style={{ ...btn(confirmDeleteTask === t.id, C.red, { padding: "3px 8px", fontSize: 11, minWidth: 28 }) }}>
+                  {confirmDeleteTask === t.id ? "もう一度" : "✕"}
+                </button>
               </div>
             </div>
           );
@@ -2620,7 +2636,17 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                             ...btn(inToday(t.id), C.accent, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
                           }}>日</button>
                       </div>
-                      <button onClick={() => deleteTodo(t.id)} style={{ ...btn(false, C.red, { padding: "4px 8px", fontSize: 11, lineHeight: 1 }) }}>✕</button>
+                      <button onClick={() => {
+                        if (confirmDelete === t.id) {
+                          deleteTodo(t.id);
+                          setConfirmDelete(null);
+                        } else {
+                          setConfirmDelete(t.id);
+                          setTimeout(() => setConfirmDelete(cd => cd === t.id ? null : cd), 3000);
+                        }
+                      }} style={{ ...btn(confirmDelete === t.id, C.red, { padding: "4px 8px", fontSize: 11, lineHeight: 1 }) }}>
+                        {confirmDelete === t.id ? "もう一度" : "✕"}
+                      </button>
                       <button onClick={() => toggleExpanded(t.id)} title="例題を表示"
                         style={{ ...btn(expanded || hasChildren, C.textMid, { padding: "4px 10px", fontSize: 12, lineHeight: 1, fontWeight: 700 }) }}>
                         {expanded ? "▲" : "▼"}{hasChildren ? ` ${children.length}` : ""}
@@ -2779,8 +2805,18 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                 }}>{U.label}</span>
                               )}
                               {c.minutes ? <span style={{ fontSize: 10, color: activeSubjectData.color }}>{fmtH(c.minutes)}</span> : null}
-                              <button onClick={() => deleteTodo(c.id)}
-                                style={{ ...btn(false, C.red, { padding: "1px 5px", fontSize: 9, lineHeight: 1 }) }}>✕</button>
+                              <button onClick={() => {
+                                if (confirmDelete === c.id) {
+                                  deleteTodo(c.id);
+                                  setConfirmDelete(null);
+                                } else {
+                                  setConfirmDelete(c.id);
+                                  setTimeout(() => setConfirmDelete(cd => cd === c.id ? null : cd), 3000);
+                                }
+                              }}
+                                style={{ ...btn(confirmDelete === c.id, C.red, { padding: "2px 7px", fontSize: 10, lineHeight: 1 }) }}>
+                                {confirmDelete === c.id ? "もう一度" : "✕"}
+                              </button>
                             </>
                           )}
                         </div>
