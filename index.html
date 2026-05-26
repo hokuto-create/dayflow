@@ -527,6 +527,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [hourPickerOpen, setHourPickerOpen] = useState(false); // grid picker for form's start time
   const [examplesModal, setExamplesModal] = useState(null); // task whose examples (children) to show
   const [confirmDeleteTask, setConfirmDeleteTask] = useState(null);
+  const [durationEditId, setDurationEditId] = useState(null);
   const askDeleteTask = (id) => {
     if (confirmDeleteTask === id) {
       deleteTask(id);
@@ -576,9 +577,18 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
     if (days && task.kind !== "other") {
       const reviewDate = addDays(task.date, days);
       const reviewTitle = task.title.startsWith("復習: ") ? task.title : `復習: ${task.title}`;
+      // For review, use the underlying TODO's own minutes (likely short, e.g. 5min for an example)
+      // Otherwise fall back to capping the original task duration at 1h
+      let reviewDur = Math.min(task.duration, 1);
+      if (task.subjectTodoId) {
+        const todo = subjectTodos.find(x => x.id === task.subjectTodoId);
+        if (todo && todo.minutes) {
+          reviewDur = Math.max(0.25, Math.round(todo.minutes / 60 * 4) / 4);
+        }
+      }
       setTasks(ts => [...ts, {
         id: genId(), date: reviewDate, title: reviewTitle,
-        hour: null, duration: Math.min(task.duration, 1),
+        hour: null, duration: reviewDur,
         priority: level === 1 ? "high" : level === 2 ? "medium" : "low",
         actual: null, done: false, note: "", goalId: task.goalId,
         kind: "study", subjectId: task.subjectId, subjectTodoId: task.subjectTodoId,
@@ -721,18 +731,47 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 border: `1px solid ${t.isReview ? C.yellow + "50" : C.border}`,
                 marginBottom: 6,
               }}>
-                <div onClick={() => setScheduleModal(t)} style={{
-                  flex: 1, cursor: "pointer", minWidth: 0,
-                }}>
-                  <div style={{ fontSize: 13, color: C.text, fontWeight: 500,
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div onClick={() => setScheduleModal(t)} style={{
+                    fontSize: 13, color: C.text, fontWeight: 500,
                     textDecoration: t.done ? "line-through" : "none",
-                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                    cursor: "pointer",
                   }}>{t.title}</div>
-                  <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
-                    {fmtDur(t.duration)}
-                    {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
-                    {t.isReview && <span style={{ color: C.yellow, marginLeft: 6, fontWeight: 700 }}>🔁 復習</span>}
+                  <div style={{ fontSize: 10, color: C.textMid, marginTop: 1, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <button onClick={() => setDurationEditId(t.id)}
+                      style={{
+                        padding: "2px 8px", borderRadius: 4,
+                        background: durationEditId === t.id ? C.accent : C.surfaceUp,
+                        border: `1px solid ${durationEditId === t.id ? C.accent : C.border}`,
+                        color: durationEditId === t.id ? "#fff" : C.text,
+                        fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: font,
+                      }}>⏱ {fmtDur(t.duration)}</button>
+                    {subjData && <span style={{ color: subjData.color }}>📚 {subjData.name}</span>}
+                    {t.isReview && <span style={{ color: C.yellow, fontWeight: 700 }}>🔁 復習</span>}
                   </div>
+                  {durationEditId === t.id && (
+                    <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
+                      {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3].map(d => (
+                        <button key={d} onClick={() => {
+                          setTasks(ts => ts.map(x => x.id === t.id ? { ...x, duration: d } : x));
+                          setDurationEditId(null);
+                        }} style={{
+                          padding: "4px 8px", borderRadius: 4,
+                          background: t.duration === d ? C.accent : C.surface,
+                          border: `1px solid ${t.duration === d ? C.accent : C.border}`,
+                          color: t.duration === d ? "#fff" : C.text,
+                          fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: font,
+                        }}>{fmtDur(d)}</button>
+                      ))}
+                      <button onClick={() => setDurationEditId(null)}
+                        style={{
+                          padding: "4px 8px", borderRadius: 4,
+                          background: "transparent", border: `1px solid ${C.border}`,
+                          color: C.textMid, fontSize: 11, cursor: "pointer", fontFamily: font,
+                        }}>閉じる</button>
+                    </div>
+                  )}
                 </div>
                 <button onClick={() => setScheduleModal(t)}
                   style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>時間設定</button>
@@ -1973,14 +2012,18 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       const reviewDate = addDays(todayStr(), days);
       // Check if review task already exists for this todo on/after today
       const existingReview = tasks.find(t => t.subjectTodoId === id && t.isReview && t.date >= todayStr() && !t.done);
+      // Compute review duration: if todo has children (parent), use parent+children sum; else use todo.minutes
+      const childMin = subjectTodos.filter(c => c.parentId === todo.id).reduce((s, c) => s + (c.minutes || 0), 0);
+      const totalMin = (todo.minutes || 0) + childMin;
+      const reviewDur = totalMin ? Math.max(0.25, Math.round(totalMin / 60 * 4) / 4) : 1;
       if (existingReview) {
-        // Update existing review date
-        setTasks(ts => ts.map(t => t.id === existingReview.id ? { ...t, date: reviewDate } : t));
+        // Update existing review date and duration
+        setTasks(ts => ts.map(t => t.id === existingReview.id ? { ...t, date: reviewDate, duration: reviewDur } : t));
       } else {
         const reviewTitle = todo.text.startsWith("復習: ") ? todo.text : `復習: ${todo.text}`;
         setTasks(ts => [...ts, {
           id: genId(), date: reviewDate, title: reviewTitle,
-          hour: null, duration: 1,
+          hour: null, duration: reviewDur,
           priority: level === 1 ? "high" : level === 2 ? "medium" : "low",
           actual: null, done: false, note: "", goalId: null,
           kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
