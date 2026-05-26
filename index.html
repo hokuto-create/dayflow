@@ -1530,6 +1530,126 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
 /* ══════════════════════════════════════════════════════
    SUBJECTS VIEW (科目別TODO)
 ══════════════════════════════════════════════════════ */
+function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText }) {
+  const [text, setText] = useState("");
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkPrefix, setBulkPrefix] = useState("例題");
+  const [bulkCount, setBulkCount] = useState(5);
+  const [bulkMinutes, setBulkMinutes] = useState("");
+
+  // Extract chapter number from parent text
+  // Priority: "XX1-3" → 1, "1章" → 1, fallback to first standalone number
+  const extractChapter = (text) => {
+    if (!text) return "1";
+    let m = text.match(/(\d+)[-−]/);
+    if (m) return m[1];
+    m = text.match(/(\d+)\s*章/);
+    if (m) return m[1];
+    m = text.match(/(\d+)/);
+    if (m) return m[1];
+    return "1";
+  };
+  const [bulkChapter, setBulkChapter] = useState(extractChapter(parentText));
+
+  // Re-init chapter when bulk panel opens
+  const openBulk = () => {
+    setBulkChapter(extractChapter(parentText));
+    setBulkOpen(true);
+  };
+
+  const submit = () => {
+    if (!text.trim()) return;
+    onAdd(text);
+    setText("");
+  };
+
+  const submitBulk = () => {
+    const n = parseInt(bulkCount);
+    if (!n || n < 1) return;
+    const items = [];
+    const chap = bulkChapter.trim() || "1";
+    for (let i = 1; i <= n; i++) {
+      items.push({
+        text: `${bulkPrefix}${chap}-${i}`,
+        minutes: bulkMinutes ? +bulkMinutes : null,
+      });
+    }
+    onBulkAdd(items);
+    setBulkOpen(false);
+    setBulkCount(5);
+    setBulkMinutes("");
+  };
+
+  return (
+    <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
+      {!bulkOpen ? (
+        <>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input style={{ ...input({ flex: 1, fontSize: 12, padding: "5px 8px" }) }}
+              placeholder="例題を追加（例: 例題1、Q3）"
+              value={text} onChange={e => setText(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && submit()} />
+            <button onClick={submit} style={{
+              padding: "5px 12px", borderRadius: 5, border: "none",
+              background: text.trim() ? subjectColor : C.border, color: "#fff",
+              fontSize: 12, fontWeight: 700, cursor: text.trim() ? "pointer" : "not-allowed",
+              fontFamily: font,
+            }}>+ 追加</button>
+          </div>
+          <button onClick={openBulk} style={{
+            marginTop: 6, padding: "4px 10px", borderRadius: 5,
+            background: "transparent", border: `1px dashed ${subjectColor}`,
+            color: subjectColor, fontSize: 11, fontFamily: font, cursor: "pointer",
+          }}>📐 連番で追加</button>
+        </>
+      ) : (
+        <div style={{ background: C.surfaceUp, padding: 10, borderRadius: 6 }}>
+          <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>
+            プレビュー: <span style={{ color: subjectColor, fontWeight: 700 }}>
+              {bulkPrefix}{bulkChapter || "1"}-1 〜 {bulkPrefix}{bulkChapter || "1"}-{bulkCount}
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 6, marginBottom: 8 }}>
+            <label style={{ fontSize: 10, color: C.textMid }}>
+              接頭辞
+              <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
+                value={bulkPrefix} onChange={e => setBulkPrefix(e.target.value)} />
+            </label>
+            <label style={{ fontSize: 10, color: C.textMid }}>
+              章番号
+              <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
+                value={bulkChapter} onChange={e => setBulkChapter(e.target.value)} />
+            </label>
+            <label style={{ fontSize: 10, color: C.textMid }}>
+              個数
+              <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
+                type="number" min="1" max="100"
+                value={bulkCount} onChange={e => setBulkCount(e.target.value)} />
+            </label>
+            <label style={{ fontSize: 10, color: C.textMid }}>
+              各分数 (任意)
+              <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
+                type="number" min="0" placeholder="分"
+                value={bulkMinutes} onChange={e => setBulkMinutes(e.target.value)} />
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={submitBulk} style={{
+              flex: 1, padding: "5px 10px", borderRadius: 5, border: "none",
+              background: subjectColor, color: "#fff", fontSize: 12, fontWeight: 700,
+              cursor: "pointer", fontFamily: font,
+            }}>{bulkCount}件追加</button>
+            <button onClick={() => setBulkOpen(false)} style={{
+              padding: "5px 12px", borderRadius: 5, border: `1px solid ${C.border}`,
+              background: "transparent", color: C.textMid, fontSize: 12, cursor: "pointer", fontFamily: font,
+            }}>キャンセル</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeeklyPlans, tasks, setTasks, selectedDate, goals, subjectCategories, setSubjectCategories }) {
   // Categories: persisted list, plus any from existing subjects
   const allCategories = [...new Set([...(subjectCategories || ["CPA勉強"]), ...subjects.map(s => s.category || "CPA勉強")])];
@@ -1729,7 +1849,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   };
 
   const deleteTodo = (id) => {
-    setSubjectTodos(ts => ts.filter(t => t.id !== id));
+    setSubjectTodos(ts => ts.filter(t => t.id !== id && t.parentId !== id));
   };
 
   const saveEdit = () => {
@@ -1744,27 +1864,86 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
   const activeSubjectData = subjects.find(s => s.id === activeSubject);
   const STATUS_ORDER = { unwatched: 0, reviewing: 1, done: 2 };
-  const todos = subjectTodos.filter(t => t.subjectId === activeSubject)
+
+  // Helpers: parent/child relationship via parentId
+  const isParent = (t) => !t.parentId;
+  const getChildren = (parentId) => subjectTodos.filter(t => t.parentId === parentId).sort((a, b) => a.createdAt - b.createdAt);
+
+  // Parent status is independent: use its own status only (動画視聴の進捗)
+  const parentStatusOf = (todo) => todo.status || (todo.done ? "done" : "unwatched");
+
+  // Total minutes = parent's own minutes + sum of children's minutes
+  const deriveMinutes = (todo) => {
+    const own = todo.minutes || 0;
+    const children = getChildren(todo.id);
+    return own + children.reduce((s, c) => s + (c.minutes || 0), 0);
+  };
+
+  // Watched minutes: parent counts if not unwatched, plus children's watched
+  const watchedMinutesOf = (todo) => {
+    let total = 0;
+    const pst = parentStatusOf(todo);
+    if (pst === "done" || pst === "reviewing") total += todo.minutes || 0;
+    const children = getChildren(todo.id);
+    total += children.reduce((s, c) => {
+      const cs = c.status || (c.done ? "done" : "unwatched");
+      return s + ((cs === "done" || cs === "reviewing") ? (c.minutes || 0) : 0);
+    }, 0);
+    return total;
+  };
+
+  // Top-level (parent) todos for active subject only
+  const parentTodos = subjectTodos.filter(t => t.subjectId === activeSubject && isParent(t));
+  const todos = parentTodos
     .filter(t => {
-      const st = t.status || (t.done ? "done" : "unwatched");
+      const st = parentStatusOf(t);
       if (filter === "all") return true;
       if (filter === "unwatched") return st === "unwatched";
       if (filter === "reviewing") return st === "reviewing";
       return st === "done";
     })
     .sort((a, b) => a.createdAt - b.createdAt);
-  const totalTodos = subjectTodos.filter(t => t.subjectId === activeSubject);
-  const doneTodos = totalTodos.filter(t => (t.status || (t.done ? "done" : "unwatched")) === "done");
-  const reviewingTodos = totalTodos.filter(t => (t.status || (t.done ? "done" : "unwatched")) === "reviewing");
-  const unwatchedTodos = totalTodos.filter(t => (t.status || (t.done ? "done" : "unwatched")) === "unwatched");
-  const watchedTodos = totalTodos.filter(t => {
-    const s = t.status || (t.done ? "done" : "unwatched");
-    return s === "done" || s === "reviewing";
-  });
-  const totalMin = totalTodos.reduce((s, t) => s + (t.minutes || 0), 0);
-  const doneMin = watchedTodos.reduce((s, t) => s + (t.minutes || 0), 0);
+
+  const totalTodos = parentTodos;
+  const doneTodos = parentTodos.filter(t => parentStatusOf(t) === "done");
+  const reviewingTodos = parentTodos.filter(t => parentStatusOf(t) === "reviewing");
+  const unwatchedTodos = parentTodos.filter(t => parentStatusOf(t) === "unwatched");
+  const totalMin = parentTodos.reduce((s, t) => s + deriveMinutes(t), 0);
+  const doneMin = parentTodos.reduce((s, t) => s + watchedMinutesOf(t), 0);
   const remainMin = totalMin - doneMin;
   const fmtH = (m) => m >= 60 ? `${Math.floor(m/60)}h${m%60 ? (m%60)+"m" : ""}` : `${m}m`;
+
+  // UI state: which parents are expanded
+  const [expandedParents, setExpandedParents] = useState([]);
+  // Child select mode (per parent): { parentId: [childIds] } or null when off
+  const [childSelectParent, setChildSelectParent] = useState(null); // which parent is in child-select mode
+  const [selectedChildren, setSelectedChildren] = useState([]);
+  const toggleExpanded = (id) => setExpandedParents(es =>
+    es.includes(id) ? es.filter(x => x !== id) : [...es, id]
+  );
+
+  // Add a child (例題) to a parent
+  const addChild = (parent, text) => {
+    if (!text.trim()) return;
+    setSubjectTodos(ts => [...ts, {
+      id: genId(), subjectId: parent.subjectId, parentId: parent.id,
+      text: text.trim(), minutes: null, status: "unwatched", done: false,
+      createdAt: Date.now(),
+    }]);
+  };
+
+  // Bulk add children (例題) to a parent
+  const bulkAddChildren = (parent, items) => {
+    if (!items || items.length === 0) return;
+    const now = Date.now();
+    const newItems = items.map((item, i) => ({
+      id: genId(), subjectId: parent.subjectId, parentId: parent.id,
+      text: item.text, minutes: item.minutes || null,
+      status: "unwatched", done: false,
+      createdAt: now + i,
+    }));
+    setSubjectTodos(ts => [...ts, ...newItems]);
+  };
 
   return (
     <div style={{ padding: 16, maxWidth: 600, margin: "0 auto", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1921,10 +2100,10 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                     <span style={{ fontSize: 10, color: C.textDim, marginLeft: 6, fontWeight: 400 }}>✎</span>
                   </div>
                   <div style={{ fontSize: 12, color: C.textMid, marginTop: 2 }}>
-                    {watchedTodos.length} / {totalTodos.length} 視聴済
+                    {doneTodos.length + reviewingTodos.length} / {totalTodos.length} 視聴済
                     {totalTodos.length > 0 && (
                       <span style={{ marginLeft: 6, color: activeSubjectData.color }}>
-                        ({Math.round((watchedTodos.length / totalTodos.length) * 100)}%)
+                        ({Math.round(((doneTodos.length + reviewingTodos.length) / totalTodos.length) * 100)}%)
                       </span>
                     )}
                   </div>
@@ -2141,21 +2320,28 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 該当するものはありません
               </div>
             ) : todos.map((t, idx) => {
-              const st = t.status || (t.done ? "done" : "unwatched");
+              const children = getChildren(t.id);
+              const hasChildren = children.length > 0;
+              const doneChildren = children.filter(c => (c.status || (c.done ? "done" : "unwatched")) === "done").length;
+              const st = parentStatusOf(t); // independent: parent's own status
+              const displayMinutes = deriveMinutes(t);
+              const expanded = expandedParents.includes(t.id);
               const stInfo = {
                 unwatched: { label: "未視聴", bg: "transparent", color: C.textDim, border: C.border, mark: "" },
                 reviewing: { label: "復習中", bg: C.yellow, color: "#fff", border: C.yellow, mark: "◐" },
-                done:      { label: "完了",   bg: activeSubjectData.color, color: "#fff", border: activeSubjectData.color, mark: "✓" },
+                done:      { label: "視聴済", bg: activeSubjectData.color, color: "#fff", border: activeSubjectData.color, mark: "✓" },
               }[st];
               const cycleStatus = () => {
                 const next = st === "unwatched" ? "reviewing" : st === "reviewing" ? "done" : "unwatched";
                 setStatus(t.id, next);
               };
               return (
-              <div key={t.id} style={{
+              <React.Fragment key={t.id}>
+              <div style={{
                 padding: "12px 14px", display: "flex", alignItems: "center", gap: 10,
-                borderBottom: idx < todos.length - 1 ? `1px solid ${C.border}` : "none",
+                borderBottom: idx < todos.length - 1 || expanded ? `1px solid ${C.border}` : "none",
                 opacity: st === "done" ? 0.65 : 1,
+                background: expanded ? C.surfaceUp + "60" : "transparent",
               }}>
                 {selectMode ? (
                   <button onClick={() => setSelectedTodos(sel =>
@@ -2169,7 +2355,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                     padding: 0,
                   }}>{selectedTodos.includes(t.id) ? "✓" : ""}</button>
                 ) : (
-                  <button onClick={cycleStatus} style={{
+                  <button onClick={cycleStatus} title="動画の視聴状況"
+                    style={{
                     width: 24, height: 24, borderRadius: "50%",
                     border: `2px solid ${stInfo.border}`,
                     background: stInfo.bg,
@@ -2243,12 +2430,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                         </div>
                       )}
                     </div>
-                    {t.minutes ? (
+                    {displayMinutes ? (
                       <span style={{
                         fontSize: 11, color: activeSubjectData.color, fontWeight: 600,
                         background: activeSubjectData.color + "18", padding: "2px 7px",
                         borderRadius: 4, flexShrink: 0,
-                      }}>{fmtH(t.minutes)}</span>
+                      }}>{fmtH(displayMinutes)}{hasChildren && <span style={{ opacity: 0.6 }}> 📝{doneChildren}/{children.length}</span>}</span>
                     ) : null}
                     <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
                       <div style={{ display: "flex", gap: 3 }}>
@@ -2265,11 +2452,203 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                             ...btn(inToday(t.id), C.accent, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
                           }}>日</button>
                       </div>
-                      <button onClick={() => deleteTodo(t.id)} style={{ ...btn(false, C.red, { padding: "2px 5px", fontSize: 9, lineHeight: 1 }) }}>✕</button>
+                      <button onClick={() => deleteTodo(t.id)} style={{ ...btn(false, C.red, { padding: "4px 8px", fontSize: 11, lineHeight: 1 }) }}>✕</button>
+                      <button onClick={() => toggleExpanded(t.id)} title="例題を表示"
+                        style={{ ...btn(expanded || hasChildren, C.textMid, { padding: "4px 10px", fontSize: 12, lineHeight: 1, fontWeight: 700 }) }}>
+                        {expanded ? "▲" : "▼"}{hasChildren ? ` ${children.length}` : ""}
+                      </button>
                     </div>
                   </>
                 )}
               </div>
+
+              {/* Children (例題) */}
+              {expanded && (
+                <div style={{
+                  padding: "8px 14px 12px 50px",
+                  background: C.surfaceUp + "60",
+                  borderBottom: idx < todos.length - 1 ? `1px solid ${C.border}` : "none",
+                }}>
+                  {/* Bulk action toolbar */}
+                  {hasChildren && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+                      <button onClick={() => {
+                        if (childSelectParent === t.id) {
+                          setChildSelectParent(null);
+                          setSelectedChildren([]);
+                        } else {
+                          setChildSelectParent(t.id);
+                          setSelectedChildren([]);
+                        }
+                      }} style={{ ...btn(childSelectParent === t.id, C.purple, { fontSize: 12, padding: "6px 12px" }) }}>
+                        {childSelectParent === t.id ? "✕ 選択終了" : "☑ 複数選択"}
+                      </button>
+                      {childSelectParent === t.id && (
+                        <>
+                          <button onClick={() => setSelectedChildren(children.map(c => c.id))}
+                            style={{ ...btn(false, C.textMid, { fontSize: 12, padding: "6px 12px" }) }}>全選択</button>
+                          <span style={{ fontSize: 11, color: C.textMid, flex: 1, minWidth: 60 }}>
+                            {selectedChildren.length}件選択中
+                          </span>
+                          {selectedChildren.length > 0 && (
+                            <div style={{ display: "flex", gap: 8, width: "100%", marginTop: 4 }}>
+                              {/* Bulk status buttons */}
+                              <div style={{ display: "flex", gap: 4 }}>
+                                {[
+                                  ["unwatched", "", C.textDim, "未"],
+                                  ["reviewing", "◐", C.yellow, "復"],
+                                  ["done", "✓", activeSubjectData.color, "解"],
+                                ].map(([st, mark, col, lbl]) => (
+                                  <button key={st} onClick={() => {
+                                    setSubjectTodos(ts => ts.map(x =>
+                                      selectedChildren.includes(x.id) ? { ...x, status: st, done: st === "done" } : x
+                                    ));
+                                  }} title={`${lbl}にする`}
+                                    style={{
+                                      width: 34, height: 34, borderRadius: 6,
+                                      background: col, color: "#fff",
+                                      border: "none", fontSize: 14, fontWeight: 700, cursor: "pointer",
+                                      padding: 0,
+                                    }}>{mark || lbl}</button>
+                                ))}
+                              </div>
+                              <div style={{ width: 1, background: C.border }} />
+                              {/* Bulk understanding buttons */}
+                              <div style={{ display: "flex", gap: 4 }}>
+                                {[
+                                  [1, "✕", C.red, "わからない"],
+                                  [2, "△", C.yellow, "あやふや"],
+                                  [3, "○", C.blue, "一応"],
+                                  [4, "◎", C.green, "万全"],
+                                ].map(([lv, mark, col, lbl]) => (
+                                  <button key={lv} onClick={() => {
+                                    setSubjectTodos(ts => ts.map(x =>
+                                      selectedChildren.includes(x.id)
+                                        ? { ...x, understanding: lv, status: x.status === "unwatched" ? "reviewing" : x.status }
+                                        : x
+                                    ));
+                                  }} title={lbl}
+                                    style={{
+                                      width: 34, height: 34, borderRadius: 6,
+                                      background: col, color: "#fff",
+                                      border: "none", fontSize: 14, fontWeight: 700, cursor: "pointer",
+                                      padding: 0, fontFamily: font,
+                                    }}>{mark}</button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {children.map(c => {
+                    const cst = c.status || (c.done ? "done" : "unwatched");
+                    const cycleC = () => {
+                      const next = cst === "unwatched" ? "reviewing" : cst === "reviewing" ? "done" : "unwatched";
+                      setStatus(c.id, next);
+                    };
+                    const cInfo = {
+                      unwatched: { bg: "transparent", color: C.textDim, border: C.border, mark: "" },
+                      reviewing: { bg: C.yellow, color: "#fff", border: C.yellow, mark: "◐" },
+                      done: { bg: activeSubjectData.color, color: "#fff", border: activeSubjectData.color, mark: "✓" },
+                    }[cst];
+                    const U = {
+                      1: { label: "わからない", color: C.red },
+                      2: { label: "あやふや",   color: C.yellow },
+                      3: { label: "一応",       color: C.blue },
+                      4: { label: "万全",       color: C.green },
+                    }[c.understanding];
+                    return (
+                      <div key={c.id} style={{
+                        padding: "5px 0", opacity: cst === "done" ? 0.6 : 1,
+                      }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          {childSelectParent === t.id ? (
+                            <button onClick={() => setSelectedChildren(sel =>
+                              sel.includes(c.id) ? sel.filter(x => x !== c.id) : [...sel, c.id]
+                            )} style={{
+                              width: 28, height: 28, borderRadius: 6,
+                              border: `2px solid ${selectedChildren.includes(c.id) ? C.purple : C.border}`,
+                              background: selectedChildren.includes(c.id) ? C.purple : "transparent",
+                              cursor: "pointer", color: "#fff", fontSize: 14, fontWeight: 700,
+                              flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                              padding: 0,
+                            }}>{selectedChildren.includes(c.id) ? "✓" : ""}</button>
+                          ) : (
+                            <button onClick={cycleC} style={{
+                              width: 28, height: 28, borderRadius: "50%",
+                              border: `2px solid ${cInfo.border}`, background: cInfo.bg,
+                              color: cInfo.color, fontSize: 14, fontWeight: 700, cursor: "pointer",
+                              flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                              padding: 0,
+                            }}>{cInfo.mark}</button>
+                          )}
+                          {editTodoId === c.id ? (
+                            <>
+                              <input style={{ ...input({ flex: 1 }) }} value={editTodoText}
+                                onChange={e => setEditTodoText(e.target.value)}
+                                onKeyDown={e => e.key === "Enter" && saveEdit()} autoFocus />
+                              <input style={{ ...input({ width: 50 }) }} type="number" placeholder="分" min="0"
+                                value={editTodoMinutes}
+                                onChange={e => setEditTodoMinutes(e.target.value)}
+                                onKeyDown={e => e.key === "Enter" && saveEdit()} />
+                              <button onClick={saveEdit} style={{ ...btn(true, C.green, { padding: "3px 8px", fontSize: 11 }) }}>保存</button>
+                            </>
+                          ) : (
+                            <>
+                              <span onClick={() => { setEditTodoId(c.id); setEditTodoText(c.text); setEditTodoMinutes(c.minutes || ""); }}
+                                style={{
+                                  flex: 1, fontSize: 12,
+                                  color: cst === "done" ? C.textMid : C.text,
+                                  textDecoration: cst === "done" ? "line-through" : "none",
+                                  cursor: "pointer", minWidth: 0,
+                                }}>{c.text}</span>
+                              {U && (
+                                <span style={{
+                                  background: U.color + "20", color: U.color,
+                                  padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600,
+                                }}>{U.label}</span>
+                              )}
+                              {c.minutes ? <span style={{ fontSize: 10, color: activeSubjectData.color }}>{fmtH(c.minutes)}</span> : null}
+                              <button onClick={() => deleteTodo(c.id)}
+                                style={{ ...btn(false, C.red, { padding: "1px 5px", fontSize: 9, lineHeight: 1 }) }}>✕</button>
+                            </>
+                          )}
+                        </div>
+                        {/* Understanding buttons (shown when reviewing or done) */}
+                        {(cst === "reviewing" || cst === "done") && editTodoId !== c.id && childSelectParent !== t.id && (
+                          <div style={{ display: "flex", gap: 5, marginTop: 6, marginLeft: 36 }}>
+                            {[
+                              [1, "✕", C.red, "わからない"],
+                              [2, "△", C.yellow, "あやふや"],
+                              [3, "○", C.blue, "一応"],
+                              [4, "◎", C.green, "万全"],
+                            ].map(([lv, mark, col, lbl]) => (
+                              <button key={lv} onClick={() => setUnderstanding(c.id, c.understanding === lv ? null : lv)}
+                                title={lbl}
+                                style={{
+                                  width: 30, height: 30, borderRadius: 6,
+                                  background: c.understanding === lv ? col : "transparent",
+                                  border: `1px solid ${c.understanding === lv ? col : C.border}`,
+                                  color: c.understanding === lv ? "#fff" : C.textDim,
+                                  fontSize: 14, fontWeight: 700, cursor: "pointer",
+                                  padding: 0, lineHeight: 1, fontFamily: font,
+                                }}>{mark}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <ChildAdder
+                    onAdd={(text) => addChild(t, text)}
+                    onBulkAdd={(items) => bulkAddChildren(t, items)}
+                    subjectColor={activeSubjectData.color}
+                    parentText={t.text} />
+                </div>
+              )}
+              </React.Fragment>
               );
             })}
           </div>
