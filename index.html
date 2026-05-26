@@ -2020,9 +2020,25 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     if (!inMonthly(todo.id)) sendToMonthly(todo);
   };
 
+  // Calculate total minutes including children (例題)
+  const totalMinutesOf = (todo) => {
+    const own = todo.minutes || 0;
+    const childMin = subjectTodos
+      .filter(c => c.parentId === todo.id)
+      .reduce((s, c) => s + (c.minutes || 0), 0);
+    return own + childMin;
+  };
+
+  // Convert minutes to task duration in hours, rounded to 15-min (0.25h) increments
+  const todoDuration = (todo) => {
+    const m = totalMinutesOf(todo);
+    if (!m) return 1;
+    return Math.max(0.25, Math.round(m / 60 * 4) / 4);
+  };
+
   const sendToToday = (todo) => {
     if (inToday(todo.id)) return;
-    const dur = todo.minutes ? Math.max(0.5, Math.round(todo.minutes / 60 * 2) / 2) : 1;
+    const dur = todoDuration(todo);
     setTasks(ts => [...ts, {
       id: genId(), date: selectedDate, title: todo.text,
       hour: null, duration: dur, priority: "medium",
@@ -3232,7 +3248,9 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                   return (
                     <button key={d} onClick={() => {
                       if (isIn) return;
-                      const dur = todo.minutes ? Math.max(0.5, Math.round(todo.minutes / 60 * 2) / 2) : 1;
+                      const childMin = subjectTodos.filter(c => c.parentId === todo.id).reduce((s, c) => s + (c.minutes || 0), 0);
+                      const totalMin = (todo.minutes || 0) + childMin;
+                      const dur = totalMin ? Math.max(0.25, Math.round(totalMin / 60 * 4) / 4) : 1;
                       setTasks(ts => [...ts, {
                         id: genId(), date: d, title: todo.text,
                         hour: null, duration: dur, priority: "medium",
@@ -3293,7 +3311,9 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                       const newTasks = [];
                       selTodos.forEach(t => {
                         if (!tasks.some(task => task.date === d && task.subjectTodoId === t.id)) {
-                          const dur = t.minutes ? Math.max(0.5, Math.round(t.minutes/60*2)/2) : 1;
+                          const childMin = subjectTodos.filter(c => c.parentId === t.id).reduce((s, c) => s + (c.minutes || 0), 0);
+                          const totalMin = (t.minutes || 0) + childMin;
+                          const dur = totalMin ? Math.max(0.25, Math.round(totalMin / 60 * 4) / 4) : 1;
                           newTasks.push({
                             id: genId(), date: d, title: t.text,
                             hour: null, duration: dur, priority: "mid",
