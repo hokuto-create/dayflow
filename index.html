@@ -2479,7 +2479,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   </label>
                   <label style={{ fontSize: 10, color: C.textMid }}>
                     各分数 (任意)
-                    <input style={input()} type="number" min="0" value={tpl.minutes} onChange={e => setTpl(t => ({ ...t, minutes: +e.target.value }))} />
+                    <input style={input()} type="number" min="0" placeholder="分"
+                      value={tpl.minutes ?? ""}
+                      onChange={e => {
+                        const v = e.target.value;
+                        setTpl(t => ({ ...t, minutes: v === "" ? "" : +v }));
+                      }} />
                   </label>
                   <label style={{ fontSize: 10, color: C.textMid, gridColumn: "1 / -1" }}>
                     説明 (任意)
@@ -2513,15 +2518,27 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
                   {tpl.chapters.map((c, idx) => (
                     <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <input style={input({ width: 70 })} type="number" min="1" value={c.chapter}
-                        onChange={e => setTpl(t => ({
-                          ...t, chapters: t.chapters.map((x, i) => i === idx ? { ...x, chapter: +e.target.value } : x)
-                        }))} />
+                      <input style={input({ width: 70 })} type="number" min="1"
+                        value={c.chapter ?? ""}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setTpl(t => ({
+                            ...t, chapters: t.chapters.map((x, i) => i === idx
+                              ? { ...x, chapter: v === "" ? "" : +v }
+                              : x)
+                          }));
+                        }} />
                       <span style={{ fontSize: 11, color: C.textMid }}>章 ×</span>
-                      <input style={input({ flex: 1 })} type="number" min="1" value={c.sections}
-                        onChange={e => setTpl(t => ({
-                          ...t, chapters: t.chapters.map((x, i) => i === idx ? { ...x, sections: +e.target.value } : x)
-                        }))} />
+                      <input style={input({ flex: 1 })} type="number" min="1"
+                        value={c.sections ?? ""}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setTpl(t => ({
+                            ...t, chapters: t.chapters.map((x, i) => i === idx
+                              ? { ...x, sections: v === "" ? "" : +v }
+                              : x)
+                          }));
+                        }} />
                       <span style={{ fontSize: 11, color: C.textMid }}>節</span>
                       {tpl.chapters.length > 1 && (
                         <button onClick={() => setTpl(t => ({ ...t, chapters: t.chapters.filter((_, i) => i !== idx) }))}
@@ -2530,7 +2547,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                     </div>
                   ))}
                   <button onClick={() => setTpl(t => ({
-                    ...t, chapters: [...t.chapters, { chapter: (t.chapters[t.chapters.length-1]?.chapter || 0) + 1, sections: 10 }]
+                    ...t, chapters: [...t.chapters, { chapter: (+t.chapters[t.chapters.length-1]?.chapter || 0) + 1, sections: 10 }]
                   }))} style={{ ...btn(false, C.blue, { padding: "5px", fontSize: 11 }) }}>
                     + 章を追加
                   </button>
