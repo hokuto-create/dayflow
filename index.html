@@ -1253,6 +1253,10 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           return null;
         }
         const subjData = subjects.find(s => s.id === parentTodo.subjectId);
+        const mMode = subjData && subjData.category && subjData.category !== "CPA勉強";
+        const ML = mMode
+          ? { unwatched: "未着手", done: "完了", progressLabel: "取り組み:" }
+          : { unwatched: "未視聴", done: "視聴済", progressLabel: "動画:" };
         const children = subjectTodos.filter(x => x.parentId === parentTodo.id)
           .sort((a, b) => a.createdAt - b.createdAt);
         const setChildStatus = (id, status) => {
@@ -1298,11 +1302,11 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 </div>
                 {/* Parent video status */}
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 11, color: C.textMid }}>動画:</span>
+                  <span style={{ fontSize: 11, color: C.textMid }}>{ML.progressLabel}</span>
                   {[
-                    ["unwatched", "未視聴", C.textDim],
+                    ["unwatched", ML.unwatched, C.textDim],
                     ["reviewing", "復習中", C.yellow],
-                    ["done", "視聴済", accent],
+                    ["done", ML.done, accent],
                   ].map(([st, lbl, col]) => (
                     <button key={st} onClick={() => setParentStatus(st)}
                       style={{
@@ -1768,7 +1772,7 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
                         <div style={{ width: `${pct}%`, height: "100%", background: x.subject.color }} />
                       </div>
                       <div style={{ fontSize: 10, color: C.textMid, marginTop: 2 }}>
-                        {(x.watchedMin/60).toFixed(1)}h 視聴済 / 残 {(x.remainMin/60).toFixed(1)}h
+                        {(x.watchedMin/60).toFixed(1)}h 完了 / 残 {(x.remainMin/60).toFixed(1)}h
                       </div>
                     </div>
                   );
@@ -1785,10 +1789,10 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
 /* ══════════════════════════════════════════════════════
    SUBJECTS VIEW (科目別TODO)
 ══════════════════════════════════════════════════════ */
-function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText }) {
+function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode }) {
   const [text, setText] = useState("");
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkPrefix, setBulkPrefix] = useState("例題");
+  const [bulkPrefix, setBulkPrefix] = useState(materialMode ? "" : "例題");
   const [bulkCount, setBulkCount] = useState(5);
   const [bulkMinutes, setBulkMinutes] = useState("");
 
@@ -2140,6 +2144,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const activeSubjectData = subjects.find(s => s.id === activeSubject);
   const STATUS_ORDER = { unwatched: 0, reviewing: 1, done: 2 };
 
+  // Material mode: when category is not "CPA勉強", use textbook-oriented labels
+  const isMaterialMode = activeSubjectData && activeSubjectData.category && activeSubjectData.category !== "CPA勉強";
+  const L = isMaterialMode
+    ? { unwatched: "未着手", done: "完了", progressLabel: "取り組み:" }
+    : { unwatched: "未視聴", done: "視聴済", progressLabel: "動画:" };
+
   // Helpers: parent/child relationship via parentId
   const isParent = (t) => !t.parentId;
   const getChildren = (parentId) => subjectTodos.filter(t => t.parentId === parentId).sort((a, b) => a.createdAt - b.createdAt);
@@ -2375,7 +2385,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                     <span style={{ fontSize: 10, color: C.textDim, marginLeft: 6, fontWeight: 400 }}>✎</span>
                   </div>
                   <div style={{ fontSize: 12, color: C.textMid, marginTop: 2 }}>
-                    {doneTodos.length + reviewingTodos.length} / {totalTodos.length} 視聴済
+                    {doneTodos.length + reviewingTodos.length} / {totalTodos.length} {L.done}
                     {totalTodos.length > 0 && (
                       <span style={{ marginLeft: 6, color: activeSubjectData.color }}>
                         ({Math.round(((doneTodos.length + reviewingTodos.length) / totalTodos.length) * 100)}%)
@@ -2421,7 +2431,17 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               style={{ ...btn(bulkAddOpen, C.textMid, { flex: 1, fontSize: 11, padding: "5px" }) }}>
               📝 まとめて追加
             </button>
-            <button onClick={() => { setTplOpen(t => !t); setBulkAddOpen(false); }}
+            <button onClick={() => {
+              setTplOpen(prev => {
+                const next = !prev;
+                // When opening in material mode, default prefix to empty (number-only)
+                if (next && isMaterialMode) {
+                  setTpl(t => (t.prefix === "TX" ? { ...t, prefix: "" } : t));
+                }
+                return next;
+              });
+              setBulkAddOpen(false);
+            }}
               style={{ ...btn(tplOpen, C.textMid, { flex: 1, fontSize: 11, padding: "5px" }) }}>
               📐 連番で追加
             </button>
@@ -2619,9 +2639,9 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               const displayMinutes = deriveMinutes(t);
               const expanded = expandedParents.includes(t.id);
               const stInfo = {
-                unwatched: { label: "未視聴", bg: "transparent", color: C.textDim, border: C.border, mark: "" },
+                unwatched: { label: L.unwatched, bg: "transparent", color: C.textDim, border: C.border, mark: "" },
                 reviewing: { label: "復習中", bg: C.yellow, color: "#fff", border: C.yellow, mark: "◐" },
-                done:      { label: "視聴済", bg: activeSubjectData.color, color: "#fff", border: activeSubjectData.color, mark: "✓" },
+                done:      { label: L.done, bg: activeSubjectData.color, color: "#fff", border: activeSubjectData.color, mark: "✓" },
               }[st];
               const cycleStatus = () => {
                 const next = st === "unwatched" ? "reviewing" : st === "reviewing" ? "done" : "unwatched";
@@ -2957,6 +2977,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                     onAdd={(text) => addChild(t, text)}
                     onBulkAdd={(items) => bulkAddChildren(t, items)}
                     subjectColor={activeSubjectData.color}
+                    materialMode={isMaterialMode}
                     parentText={t.text} />
                 </div>
               )}
@@ -3262,7 +3283,7 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                 {collapsed && <span style={{ fontSize: 11, color: C.textMid, marginLeft: 6, fontWeight: 400 }}>({g.todoData.length}件)</span>}
               </div>
               <div style={{ fontSize: 11, color: C.textMid }}>
-                {fmtH(g.doneMin)} 視聴済 / 残 <span style={{ color: g.subject.color, fontWeight: 700 }}>{fmtH(Math.max(0, g.totalMin - g.doneMin))}</span>
+                {fmtH(g.doneMin)} 完了 / 残 <span style={{ color: g.subject.color, fontWeight: 700 }}>{fmtH(Math.max(0, g.totalMin - g.doneMin))}</span>
               </div>
             </div>
             {!collapsed && (
@@ -3560,7 +3581,7 @@ function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeekl
                 {collapsed && <span style={{ fontSize: 11, color: C.textMid, marginLeft: 6, fontWeight: 400 }}>({g.todoData.length}件)</span>}
               </div>
               <div style={{ fontSize: 11, color: C.textMid }}>
-                {fmtH(g.doneMin)} 視聴済 / 残 <span style={{ color: g.subject.color, fontWeight: 700 }}>{fmtH(Math.max(0, g.totalMin - g.doneMin))}</span>
+                {fmtH(g.doneMin)} 完了 / 残 <span style={{ color: g.subject.color, fontWeight: 700 }}>{fmtH(Math.max(0, g.totalMin - g.doneMin))}</span>
               </div>
             </div>
             {!collapsed && (
