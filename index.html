@@ -2056,7 +2056,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         // Update existing review date and duration
         setTasks(ts => ts.map(t => t.id === existingReview.id ? { ...t, date: reviewDate, duration: reviewDur } : t));
       } else {
-        const reviewTitle = todo.text.startsWith("復習: ") ? todo.text : `復習: ${todo.text}`;
+        const baseTitle = taskTitleFor(todo);
+        const reviewTitle = baseTitle.startsWith("復習: ") ? baseTitle : `復習: ${baseTitle}`;
         setTasks(ts => [...ts, {
           id: genId(), date: reviewDate, title: reviewTitle,
           hour: null, duration: reviewDur,
@@ -2115,11 +2116,20 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     return Math.max(1/60, m / 60);
   };
 
+  // Build a task title: for non-CPA (material) subjects, prepend the subject (textbook) name
+  const taskTitleFor = (todo) => {
+    const subj = subjects.find(s => s.id === todo.subjectId);
+    if (subj && subj.category && subj.category !== "CPA勉強") {
+      return `${subj.name} ${todo.text}`;
+    }
+    return todo.text;
+  };
+
   const sendToToday = (todo) => {
     if (inToday(todo.id)) return;
     const dur = todoDuration(todo);
     setTasks(ts => [...ts, {
-      id: genId(), date: selectedDate, title: todo.text,
+      id: genId(), date: selectedDate, title: taskTitleFor(todo),
       hour: null, duration: dur, priority: "medium",
       actual: null, done: false, note: "",
       goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
@@ -3415,7 +3425,7 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                       const totalMin = (todo.minutes || 0) + childMin;
                       const dur = totalMin ? Math.max(1/60, totalMin / 60) : 1;
                       setTasks(ts => [...ts, {
-                        id: genId(), date: d, title: todo.text,
+                        id: genId(), date: d, title: taskTitleFor(todo),
                         hour: null, duration: dur, priority: "medium",
                         actual: null, done: false, note: "",
                         goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
@@ -3476,8 +3486,10 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                           const childMin = subjectTodos.filter(c => c.parentId === t.id).reduce((s, c) => s + (c.minutes || 0), 0);
                           const totalMin = (t.minutes || 0) + childMin;
                           const dur = totalMin ? Math.max(1/60, totalMin / 60) : 1;
+                          const subj = subjects.find(s => s.id === t.subjectId);
+                          const title = (subj && subj.category && subj.category !== "CPA勉強") ? `${subj.name} ${t.text}` : t.text;
                           newTasks.push({
-                            id: genId(), date: d, title: t.text,
+                            id: genId(), date: d, title,
                             hour: null, duration: dur, priority: "mid",
                             goalId: null, kind: "study", subjectId: t.subjectId, subjectTodoId: t.id,
                           });
