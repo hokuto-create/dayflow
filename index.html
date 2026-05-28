@@ -2146,6 +2146,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
   // Material mode: when category is not "CPA勉強", use textbook-oriented labels
   const isMaterialMode = activeSubjectData && activeSubjectData.category && activeSubjectData.category !== "CPA勉強";
+  // Category-level material flag (for the add form, which depends on active category not selected subject)
+  const isMaterialCategory = activeCategory && activeCategory !== "CPA勉強";
   const L = isMaterialMode
     ? { unwatched: "未着手", done: "完了", progressLabel: "取り組み:" }
     : { unwatched: "未視聴", done: "視聴済", progressLabel: "動画:" };
@@ -2232,7 +2234,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
   return (
     <div style={{ padding: 16, maxWidth: 600, margin: "0 auto", display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ fontFamily: serif, fontSize: 18, color: C.text, textAlign: "center" }}>科目別TODO</div>
+      <div style={{ fontFamily: serif, fontSize: 18, color: C.text, textAlign: "center" }}>{isMaterialCategory ? "教材別TODO" : "科目別TODO"}</div>
 
       {/* Category tabs */}
       <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
@@ -2303,13 +2305,13 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
             padding: "8px 12px", borderRadius: 8, background: "transparent",
             color: C.accent, border: `1px dashed ${C.accent}`,
             fontSize: 13, fontFamily: font, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
-          }}>+ 科目</button>
+          }}>+ {isMaterialCategory ? "教材" : "科目"}</button>
       </div>
 
       {/* Add subject form */}
       {showSubjectForm && (
         <div style={card()}>
-          <input style={input({ marginBottom: 10 })} placeholder="科目名（例：財務会計）"
+          <input style={input({ marginBottom: 10 })} placeholder={isMaterialCategory ? "教材名（例：赤チャート数学Ⅰ）" : "科目名（例：財務会計）"}
             value={newSubject.name} onChange={e => setNewSubject(s => ({ ...s, name: e.target.value }))} />
           <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>カラー</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -2409,7 +2411,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   setTimeout(() => setConfirmDelete(c => c === activeSubjectData.id ? null : c), 3000);
                 }
               }} style={{ ...btn(confirmDelete === activeSubjectData.id, C.red, { fontSize: 11, padding: "4px 9px" }) }}>
-                {confirmDelete === activeSubjectData.id ? "削除？" : "科目削除"}
+                {confirmDelete === activeSubjectData.id ? "削除？" : (isMaterialMode ? "教材削除" : "科目削除")}
               </button>
             )}
           </div>
@@ -2988,7 +2990,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         </>
       ) : (
         <div style={{ ...card(), textAlign: "center", padding: 30, color: C.textMid }}>
-          科目を追加してください
+          {isMaterialCategory ? "教材を追加してください" : "科目を追加してください"}
         </div>
       )}
 
