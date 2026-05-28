@@ -1789,10 +1789,10 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
 /* ══════════════════════════════════════════════════════
    SUBJECTS VIEW (科目別TODO)
 ══════════════════════════════════════════════════════ */
-function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode, addLabel }) {
+function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode, addLabel, noChapter }) {
   const [text, setText] = useState("");
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkPrefix, setBulkPrefix] = useState(materialMode ? "" : "例題");
+  const [bulkPrefix, setBulkPrefix] = useState(noChapter ? "例題" : (materialMode ? "" : "例題"));
   const [bulkCount, setBulkCount] = useState(5);
   const [bulkMinutes, setBulkMinutes] = useState("");
 
@@ -1828,8 +1828,9 @@ function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode, 
     const items = [];
     const chap = bulkChapter.trim() || "1";
     for (let i = 1; i <= n; i++) {
+      const text = noChapter ? `${bulkPrefix}${i}` : `${bulkPrefix}${chap}-${i}`;
       items.push({
-        text: `${bulkPrefix}${chap}-${i}`,
+        text,
         minutes: bulkMinutes ? +bulkMinutes : null,
       });
     }
@@ -1865,20 +1866,24 @@ function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode, 
         <div style={{ background: C.surfaceUp, padding: 10, borderRadius: 6 }}>
           <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>
             プレビュー: <span style={{ color: subjectColor, fontWeight: 700 }}>
-              {bulkPrefix}{bulkChapter || "1"}-1 〜 {bulkPrefix}{bulkChapter || "1"}-{bulkCount}
+              {noChapter
+                ? `${bulkPrefix}1 〜 ${bulkPrefix}${bulkCount}`
+                : `${bulkPrefix}${bulkChapter || "1"}-1 〜 ${bulkPrefix}${bulkChapter || "1"}-${bulkCount}`}
             </span>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 6, marginBottom: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: noChapter ? "2fr 1fr 1fr" : "1.5fr 1fr 1fr 1fr", gap: 6, marginBottom: 8 }}>
             <label style={{ fontSize: 10, color: C.textMid }}>
               接頭辞
               <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
                 value={bulkPrefix} onChange={e => setBulkPrefix(e.target.value)} />
             </label>
-            <label style={{ fontSize: 10, color: C.textMid }}>
-              章番号
-              <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
-                value={bulkChapter} onChange={e => setBulkChapter(e.target.value)} />
-            </label>
+            {!noChapter && (
+              <label style={{ fontSize: 10, color: C.textMid }}>
+                章番号
+                <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
+                  value={bulkChapter} onChange={e => setBulkChapter(e.target.value)} />
+              </label>
+            )}
             <label style={{ fontSize: 10, color: C.textMid }}>
               個数
               <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
@@ -3256,6 +3261,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                     subjectColor={activeSubjectData.color}
                                     materialMode={isMaterialMode}
                                     addLabel="問題を追加（例: 例題1、問1）"
+                                    noChapter={true}
                                     parentText={c.text} />
                                 </div>
                               )}
