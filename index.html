@@ -2330,6 +2330,10 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [selectedChildren, setSelectedChildren] = useState([]);
   const [confirmBulkDelParent, setConfirmBulkDelParent] = useState(false);
   const [confirmBulkDelChild, setConfirmBulkDelChild] = useState(false);
+  // Grandchild select mode (per child=区分): which child is in grandchild-select mode, or null when off
+  const [grandSelectChild, setGrandSelectChild] = useState(null);
+  const [selectedGrandchildren, setSelectedGrandchildren] = useState([]);
+  const [confirmBulkDelGrand, setConfirmBulkDelGrand] = useState(false);
   const toggleExpanded = (id) => setExpandedParents(es =>
     es.includes(id) ? es.filter(x => x !== id) : [...es, id]
   );
@@ -3283,6 +3287,100 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                               </button>
                               {gExpanded && (
                                 <div style={{ marginTop: 6, paddingLeft: 8, borderLeft: `2px solid ${C.border}` }}>
+                                  {/* Bulk action toolbar (grandchild=問題) */}
+                                  {gkids.length > 0 && (
+                                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                                      <button onClick={() => {
+                                        if (grandSelectChild === c.id) {
+                                          setGrandSelectChild(null);
+                                          setSelectedGrandchildren([]);
+                                        } else {
+                                          setGrandSelectChild(c.id);
+                                          setSelectedGrandchildren([]);
+                                        }
+                                      }} style={{ ...btn(grandSelectChild === c.id, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
+                                        {grandSelectChild === c.id ? "✕ 選択終了" : "☑ 複数選択"}
+                                      </button>
+                                      {grandSelectChild === c.id && (
+                                        <>
+                                          <button onClick={() => setSelectedGrandchildren(gkids.map(g => g.id))}
+                                            style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "5px 10px" }) }}>全選択</button>
+                                          <span style={{ fontSize: 11, color: C.textMid, flex: 1, minWidth: 60 }}>
+                                            {selectedGrandchildren.length}件選択中
+                                          </span>
+                                          {selectedGrandchildren.length > 0 && (
+                                            <div style={{ display: "flex", gap: 8, width: "100%", marginTop: 4 }}>
+                                              {/* Bulk status buttons */}
+                                              <div style={{ display: "flex", gap: 4 }}>
+                                                {[
+                                                  ["unwatched", "", C.textDim, "未"],
+                                                  ["reviewing", "◐", C.yellow, "復"],
+                                                  ["done", "✓", activeSubjectData.color, "解"],
+                                                ].map(([st, mark, col, lbl]) => (
+                                                  <button key={st} onClick={() => {
+                                                    setSubjectTodos(ts => ts.map(x =>
+                                                      selectedGrandchildren.includes(x.id) ? { ...x, status: st, done: st === "done" } : x
+                                                    ));
+                                                  }} title={`${lbl}にする`}
+                                                    style={{
+                                                      width: 32, height: 32, borderRadius: 6,
+                                                      background: col, color: "#fff",
+                                                      border: "none", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                                                      padding: 0,
+                                                    }}>{mark || lbl}</button>
+                                                ))}
+                                              </div>
+                                              <div style={{ width: 1, background: C.border }} />
+                                              {/* Bulk understanding buttons */}
+                                              <div style={{ display: "flex", gap: 4 }}>
+                                                {[
+                                                  [1, "✕", C.red, "わからない"],
+                                                  [2, "△", C.yellow, "あやふや"],
+                                                  [3, "○", C.blue, "一応"],
+                                                  [4, "◎", C.green, "万全"],
+                                                ].map(([lv, mark, col, lbl]) => (
+                                                  <button key={lv} onClick={() => {
+                                                    setSubjectTodos(ts => ts.map(x =>
+                                                      selectedGrandchildren.includes(x.id)
+                                                        ? { ...x, understanding: lv, status: x.status === "unwatched" ? "reviewing" : x.status }
+                                                        : x
+                                                    ));
+                                                  }} title={lbl}
+                                                    style={{
+                                                      width: 32, height: 32, borderRadius: 6,
+                                                      background: col, color: "#fff",
+                                                      border: "none", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                                                      padding: 0, fontFamily: font,
+                                                    }}>{mark}</button>
+                                                ))}
+                                              </div>
+                                              <button onClick={() => {
+                                                if (confirmBulkDelGrand) {
+                                                  deleteTodosBulk(selectedGrandchildren);
+                                                  setSelectedGrandchildren([]);
+                                                  setConfirmBulkDelGrand(false);
+                                                  setGrandSelectChild(null);
+                                                } else {
+                                                  setConfirmBulkDelGrand(true);
+                                                  setTimeout(() => setConfirmBulkDelGrand(false), 3000);
+                                                }
+                                              }} title="まとめて削除"
+                                                style={{
+                                                  marginLeft: "auto", height: 32, padding: "0 12px", borderRadius: 6,
+                                                  background: confirmBulkDelGrand ? C.red : "transparent",
+                                                  border: `1px solid ${C.red}`,
+                                                  color: confirmBulkDelGrand ? "#fff" : C.red,
+                                                  fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: font,
+                                                  whiteSpace: "nowrap",
+                                                }}>
+                                                {confirmBulkDelGrand ? `削除？(${selectedGrandchildren.length})` : "🗑 削除"}
+                                              </button>
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+                                  )}
                                   {gkids.map(g => {
                                     const gst = g.status || (g.done ? "done" : "unwatched");
                                     const gInfo = {
@@ -3294,6 +3392,17 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                     return (
                                       <div key={g.id} style={{ padding: "4px 0", opacity: gst === "done" ? 0.6 : 1 }}>
                                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                          {grandSelectChild === c.id ? (
+                                            <button onClick={() => setSelectedGrandchildren(sel =>
+                                              sel.includes(g.id) ? sel.filter(x => x !== g.id) : [...sel, g.id]
+                                            )} style={{
+                                              width: 26, height: 26, borderRadius: 6,
+                                              border: `2px solid ${selectedGrandchildren.includes(g.id) ? C.purple : C.border}`,
+                                              background: selectedGrandchildren.includes(g.id) ? C.purple : "transparent",
+                                              cursor: "pointer", color: "#fff", fontSize: 13, fontWeight: 700,
+                                              flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+                                            }}>{selectedGrandchildren.includes(g.id) ? "✓" : ""}</button>
+                                          ) : (
                                           <button onClick={() => {
                                             const next = gst === "unwatched" ? "reviewing" : gst === "reviewing" ? "done" : "unwatched";
                                             setStatus(g.id, next);
@@ -3303,6 +3412,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                             color: gInfo.color, fontSize: 13, fontWeight: 700, cursor: "pointer",
                                             flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
                                           }}>{gInfo.mark}</button>
+                                          )}
                                           {editTodoId === g.id ? (
                                             <>
                                               <input style={{ ...input({ flex: 1 }) }} value={editTodoText}
@@ -3329,7 +3439,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                             </>
                                           )}
                                         </div>
-                                        {(gst === "reviewing" || gst === "done") && editTodoId !== g.id && (
+                                        {(gst === "reviewing" || gst === "done") && editTodoId !== g.id && grandSelectChild !== c.id && (
                                           <div style={{ display: "flex", gap: 5, marginTop: 5, marginLeft: 34 }}>
                                             {[[1,"✕",C.red,"わからない"],[2,"△",C.yellow,"あやふや"],[3,"○",C.blue,"一応"],[4,"◎",C.green,"万全"]].map(([lv,mark,col,lbl]) => (
                                               <button key={lv} onClick={() => setUnderstanding(g.id, g.understanding === lv ? null : lv)} title={lbl}
