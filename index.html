@@ -2131,6 +2131,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     setSubjectTodos(ts => ts.filter(t => t.id !== id && t.parentId !== id));
   };
 
+  // Delete multiple todos at once (also removes their children)
+  const deleteTodosBulk = (ids) => {
+    const idSet = new Set(ids);
+    setSubjectTodos(ts => ts.filter(t => !idSet.has(t.id) && !idSet.has(t.parentId)));
+  };
+
   const saveEdit = () => {
     if (!editTodoText.trim()) return;
     setSubjectTodos(ts => ts.map(t => t.id === editTodoId
@@ -2205,6 +2211,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   // Child select mode (per parent): { parentId: [childIds] } or null when off
   const [childSelectParent, setChildSelectParent] = useState(null); // which parent is in child-select mode
   const [selectedChildren, setSelectedChildren] = useState([]);
+  const [confirmBulkDelParent, setConfirmBulkDelParent] = useState(false);
+  const [confirmBulkDelChild, setConfirmBulkDelChild] = useState(false);
   const toggleExpanded = (id) => setExpandedParents(es =>
     es.includes(id) ? es.filter(x => x !== id) : [...es, id]
   );
@@ -2618,10 +2626,25 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   {selectedTodos.length}件選択中
                 </div>
                 {selectedTodos.length > 0 && (
-                  <button onClick={() => setBulkMonthPicker(true)}
-                    style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
-                    📅 月に追加
-                  </button>
+                  <>
+                    <button onClick={() => setBulkMonthPicker(true)}
+                      style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
+                      📅 月に追加
+                    </button>
+                    <button onClick={() => {
+                      if (confirmBulkDelParent) {
+                        deleteTodosBulk(selectedTodos);
+                        setSelectedTodos([]);
+                        setConfirmBulkDelParent(false);
+                        setSelectMode(false);
+                      } else {
+                        setConfirmBulkDelParent(true);
+                        setTimeout(() => setConfirmBulkDelParent(false), 3000);
+                      }
+                    }} style={{ ...btn(confirmBulkDelParent, C.red, { fontSize: 11, padding: "5px 10px" }) }}>
+                      {confirmBulkDelParent ? `削除？(${selectedTodos.length})` : "🗑 削除"}
+                    </button>
+                  </>
                 )}
               </>
             )}
@@ -2860,6 +2883,27 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                     }}>{mark}</button>
                                 ))}
                               </div>
+                              <button onClick={() => {
+                                if (confirmBulkDelChild) {
+                                  deleteTodosBulk(selectedChildren);
+                                  setSelectedChildren([]);
+                                  setConfirmBulkDelChild(false);
+                                  setChildSelectParent(null);
+                                } else {
+                                  setConfirmBulkDelChild(true);
+                                  setTimeout(() => setConfirmBulkDelChild(false), 3000);
+                                }
+                              }} title="まとめて削除"
+                                style={{
+                                  marginLeft: "auto", height: 34, padding: "0 12px", borderRadius: 6,
+                                  background: confirmBulkDelChild ? C.red : "transparent",
+                                  border: `1px solid ${C.red}`,
+                                  color: confirmBulkDelChild ? "#fff" : C.red,
+                                  fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: font,
+                                  whiteSpace: "nowrap",
+                                }}>
+                                {confirmBulkDelChild ? `削除？(${selectedChildren.length})` : "🗑 削除"}
+                              </button>
                             </div>
                           )}
                         </>
