@@ -1961,6 +1961,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [selectMode, setSelectMode] = useState(false);
   const [selectedTodos, setSelectedTodos] = useState([]);
   const [bulkMonthPicker, setBulkMonthPicker] = useState(false);
+  const [bulkMonthIds, setBulkMonthIds] = useState([]); // which todo ids the month picker acts on (parent/child/grandchild)
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [bulkText, setBulkText] = useState("");
   const [tplOpen, setTplOpen] = useState(false);
@@ -2886,7 +2887,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 </div>
                 {selectedTodos.length > 0 && (
                   <>
-                    <button onClick={() => setBulkMonthPicker(true)}
+                    <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
                       style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
                       📅 月に追加
                     </button>
@@ -3142,6 +3143,16 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                     }}>{mark}</button>
                                 ))}
                               </div>
+                              <button onClick={() => { setBulkMonthIds(selectedChildren); setBulkMonthPicker(true); }}
+                                title="選択した区分を月次に送る"
+                                style={{
+                                  marginLeft: "auto", height: 34, padding: "0 12px", borderRadius: 6,
+                                  background: C.purple, color: "#fff",
+                                  border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: font,
+                                  whiteSpace: "nowrap",
+                                }}>
+                                📅 月に追加
+                              </button>
                               <button onClick={() => {
                                 if (confirmBulkDelChild) {
                                   deleteTodosBulk(selectedChildren);
@@ -3154,7 +3165,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                 }
                               }} title="まとめて削除"
                                 style={{
-                                  marginLeft: "auto", height: 34, padding: "0 12px", borderRadius: 6,
+                                  height: 34, padding: "0 12px", borderRadius: 6,
                                   background: confirmBulkDelChild ? C.red : "transparent",
                                   border: `1px solid ${C.red}`,
                                   color: confirmBulkDelChild ? "#fff" : C.red,
@@ -3354,6 +3365,16 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                                     }}>{mark}</button>
                                                 ))}
                                               </div>
+                                              <button onClick={() => { setBulkMonthIds(selectedGrandchildren); setBulkMonthPicker(true); }}
+                                                title="選択した問題を月次に送る"
+                                                style={{
+                                                  marginLeft: "auto", height: 32, padding: "0 12px", borderRadius: 6,
+                                                  background: C.purple, color: "#fff",
+                                                  border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: font,
+                                                  whiteSpace: "nowrap",
+                                                }}>
+                                                📅 月に追加
+                                              </button>
                                               <button onClick={() => {
                                                 if (confirmBulkDelGrand) {
                                                   deleteTodosBulk(selectedGrandchildren);
@@ -3366,7 +3387,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                                 }
                                               }} title="まとめて削除"
                                                 style={{
-                                                  marginLeft: "auto", height: 32, padding: "0 12px", borderRadius: 6,
+                                                  height: 32, padding: "0 12px", borderRadius: 6,
                                                   background: confirmBulkDelGrand ? C.red : "transparent",
                                                   border: `1px solid ${C.red}`,
                                                   color: confirmBulkDelGrand ? "#fff" : C.red,
@@ -3543,7 +3564,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
       {/* Bulk month picker modal */}
       {bulkMonthPicker && (() => {
-        const selTodos = subjectTodos.filter(t => selectedTodos.includes(t.id));
+        const selTodos = subjectTodos.filter(t => bulkMonthIds.includes(t.id));
         const totalMin = selTodos.reduce((s, t) => s + (t.minutes || 0), 0);
         const monthList = Array.from({ length: 18 }, (_, i) => {
           const d = new Date();
@@ -3600,7 +3621,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                 <button onClick={() => setBulkMonthPicker(false)}
                   style={{ ...btn(false, C.textMid, { flex: 1, padding: "9px" }) }}>キャンセル</button>
-                <button onClick={() => { setBulkMonthPicker(false); setSelectMode(false); setSelectedTodos([]); }}
+                <button onClick={() => {
+                  setBulkMonthPicker(false); setBulkMonthIds([]);
+                  setSelectMode(false); setSelectedTodos([]);
+                  setChildSelectParent(null); setSelectedChildren([]);
+                  setGrandSelectChild(null); setSelectedGrandchildren([]);
+                }}
                   style={{ ...btn(true, C.accent, { flex: 1, padding: "9px" }) }}>完了</button>
               </div>
             </div>
