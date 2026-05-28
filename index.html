@@ -3406,7 +3406,11 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                   const dayName = DAYS_JA[dObj.getDay()];
                   return (
                     <button key={d} onClick={() => {
-                      if (isIn) return;
+                      if (isIn) {
+                        // Toggle off: remove this todo's task on that day
+                        setTasks(ts => ts.filter(t => !(t.date === d && t.subjectTodoId === todo.id)));
+                        return;
+                      }
                       const childMin = subjectTodos.filter(c => c.parentId === todo.id).reduce((s, c) => s + (c.minutes || 0), 0);
                       const totalMin = (todo.minutes || 0) + childMin;
                       const dur = totalMin ? Math.max(1/60, totalMin / 60) : 1;
@@ -3416,14 +3420,13 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                         actual: null, done: false, note: "",
                         goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
                       }]);
-                      setDayPickerTodo(null);
-                    }} disabled={isIn} style={{
+                    }} style={{
                       padding: "10px 14px", borderRadius: 8,
                       background: isIn ? C.accent : C.surfaceUp,
                       border: `1px solid ${isIn ? C.accent : C.border}`,
                       color: isIn ? "#fff" : isPast ? C.textDim : C.text,
                       fontFamily: font, fontSize: 13,
-                      cursor: isIn ? "default" : "pointer",
+                      cursor: "pointer",
                       display: "flex", alignItems: "center", gap: 8,
                     }}>
                       <span style={{ flex: 1, textAlign: "left" }}>
