@@ -1952,6 +1952,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [bulkText, setBulkText] = useState("");
   const [tplOpen, setTplOpen] = useState(false);
   const [tpl, setTpl] = useState({ prefix: "TX", chapters: [{ chapter: 1, sections: 10 }], suffix: "", minutes: 60, numberingMode: "perChapter" });
+  const [chapterTitlesText, setChapterTitlesText] = useState("");
 
   const COLORS = [C.blue, C.green, C.accent, C.purple, C.red, C.yellow];
 
@@ -2023,6 +2024,13 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   };
 
   // Parse a line like "TX1-1 損益計算書 60" -> {text, minutes}
+  const parseChapterTitles = (rawText) => {
+    const lines = rawText.split("\n").map(l => l.trim()).filter(l => l);
+    return lines.map((line, i) =>
+      /^第\d+章/.test(line) ? line : `第${i + 1}章 ${line}`
+    );
+  };
+
   const parseLine = (line) => {
     const trimmed = line.trim();
     if (!trimmed) return null;
@@ -2050,6 +2058,24 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     if (!activeSubject) return;
     const items = [];
     const now = Date.now();
+
+    if (tpl.numberingMode === "chapterTitle") {
+      const parsed = parseChapterTitles(chapterTitlesText);
+      if (!parsed.length) return;
+      parsed.forEach((text, i) => {
+        items.push({
+          id: genId(), subjectId: activeSubject,
+          text,
+          minutes: tpl.minutes || null,
+          status: "unwatched", done: false, createdAt: now + i,
+        });
+      });
+      if (items.length) setSubjectTodos(ts => [...ts, ...items]);
+      setChapterTitlesText("");
+      setTplOpen(false);
+      return;
+    }
+
     let i = 0;
     let runningNum = 1; // continuous numbering across chapters
     tpl.chapters.forEach(({ chapter, sections, title }) => {
@@ -2641,13 +2667,25 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
           {/* Template add form */}
           {tplOpen && (() => {
-            const totalCount = tpl.chapters.reduce((s, c) => s + Math.max(0, c.sections), 0);
+            const isChapTitle = tpl.numberingMode === "chapterTitle";
+            const parsedChapterTitles = isChapTitle ? parseChapterTitles(chapterTitlesText) : [];
+            const totalCount = isChapTitle
+              ? parsedChapterTitles.length
+              : tpl.chapters.reduce((s, c) => s + Math.max(0, c.sections), 0);
             const firstC = tpl.chapters[0];
             const lastC = tpl.chapters[tpl.chapters.length - 1];
             const lastNum = totalCount;
             const firstLast = firstC.sections;
             let previewFirst, previewLast;
-            if (tpl.numberingMode === "continuous") {
+            if (isChapTitle) {
+              if (parsedChapterTitles.length > 0) {
+                previewFirst = parsedChapterTitles[0];
+                previewLast = parsedChapterTitles[parsedChapterTitles.length - 1];
+              } else {
+                previewFirst = "第1章 ◯◯";
+                previewLast = "第N章 ◯◯";
+              }
+            } else if (tpl.numberingMode === "continuous") {
               previewFirst = `${tpl.prefix}1`;
               previewLast = `${tpl.prefix}${lastNum}`;
             } else if (tpl.numberingMode === "chapterContinuous") {
@@ -2661,15 +2699,17 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               <div style={{ ...card({ padding: 12, background: C.surfaceUp }) }}>
                 <div style={{ fontSize: 11, color: C.textMid, marginBottom: 8 }}>
                   プレビュー: <span style={{ color: activeSubjectData.color, fontWeight: 700 }}>
-                    {previewFirst} 〜 {previewLast}{tpl.suffix && " " + tpl.suffix}
+                    {previewFirst} 〜 {previewLast}{!isChapTitle && tpl.suffix && " " + tpl.suffix}
                   </span>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
-                  <label style={{ fontSize: 10, color: C.textMid }}>
-                    接頭辞
-                    <input style={input()} value={tpl.prefix} onChange={e => setTpl(t => ({ ...t, prefix: e.target.value }))} />
-                  </label>
-                  <label style={{ fontSize: 10, color: C.textMid }}>
+                  {!isChapTitle && (
+                    <label style={{ fontSize: 10, color: C.textMid }}>
+                      接頭辞
+                      <input style={input()} value={tpl.prefix} onChange={e => setTpl(t => ({ ...t, prefix: e.target.value }))} />
+                    </label>
+                  )}
+                  <label style={{ fontSize: 10, color: C.textMid, ...(isChapTitle ? { gridColumn: "1 / -1" } : {}) }}>
                     各分数 (任意)
                     <input style={input()} type="number" min="0" placeholder="分"
                       value={tpl.minutes ?? ""}
@@ -2678,10 +2718,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                         setTpl(t => ({ ...t, minutes: v === "" ? "" : +v }));
                       }} />
                   </label>
-                  <label style={{ fontSize: 10, color: C.textMid, gridColumn: "1 / -1" }}>
-                    説明 (任意)
-                    <input style={input()} placeholder="例: 概論" value={tpl.suffix} onChange={e => setTpl(t => ({ ...t, suffix: e.target.value }))} />
-                  </label>
+                  {!isChapTitle && (
+                    <label style={{ fontSize: 10, color: C.textMid, gridColumn: "1 / -1" }}>
+                      説明 (任意)
+                      <input style={input()} placeholder="例: 概論" value={tpl.suffix} onChange={e => setTpl(t => ({ ...t, suffix: e.target.value }))} />
+                    </label>
+                  )}
                 </div>
 
                 <div style={{ fontSize: 10, color: C.textMid, marginBottom: 4 }}>番号の付け方</div>
@@ -2704,58 +2746,88 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       <div style={{ fontSize: 10, color: C.textMid, marginTop: 2 }}>{example}</div>
                     </button>
                   ))}
+                  {isMaterialMode && (
+                    <button onClick={() => setTpl(t => ({ ...t, numberingMode: "chapterTitle" }))}
+                      style={{
+                        padding: "8px 10px", borderRadius: 6, textAlign: "left",
+                        background: isChapTitle ? activeSubjectData.color + "20" : C.surface,
+                        border: `1px solid ${isChapTitle ? activeSubjectData.color : C.border}`,
+                        cursor: "pointer", fontFamily: font,
+                      }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>
+                        {isChapTitle && "✓ "}章タイトル方式
+                      </div>
+                      <div style={{ fontSize: 10, color: C.textMid, marginTop: 2 }}>第1章 ◯◯, 第2章 ◯◯ ... （1行1章）</div>
+                    </button>
+                  )}
                 </div>
 
-                <div style={{ fontSize: 10, color: C.textMid, marginBottom: 4 }}>章ごとの節数</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
-                  {tpl.chapters.map((c, idx) => (
-                    <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                      <input style={input({ width: 60 })} type="number" min="1"
-                        value={c.chapter ?? ""}
-                        onChange={e => {
-                          const v = e.target.value;
-                          setTpl(t => ({
-                            ...t, chapters: t.chapters.map((x, i) => i === idx
-                              ? { ...x, chapter: v === "" ? "" : +v }
-                              : x)
-                          }));
-                        }} />
-                      <span style={{ fontSize: 11, color: C.textMid }}>章 ×</span>
-                      <input style={input({ width: 56 })} type="number" min="1"
-                        value={c.sections ?? ""}
-                        onChange={e => {
-                          const v = e.target.value;
-                          setTpl(t => ({
-                            ...t, chapters: t.chapters.map((x, i) => i === idx
-                              ? { ...x, sections: v === "" ? "" : +v }
-                              : x)
-                          }));
-                        }} />
-                      <span style={{ fontSize: 11, color: C.textMid }}>節</span>
-                      {tpl.chapters.length > 1 && (
-                        <button onClick={() => setTpl(t => ({ ...t, chapters: t.chapters.filter((_, i) => i !== idx) }))}
-                          style={{ ...btn(false, C.red, { padding: "4px 8px", fontSize: 10 }) }}>✕</button>
-                      )}
-                      <input style={input({ flex: 1, minWidth: 120 })} placeholder="章タイトル (任意, 例: 数と式)"
-                        value={c.title ?? ""}
-                        onChange={e => {
-                          const v = e.target.value;
-                          setTpl(t => ({
-                            ...t, chapters: t.chapters.map((x, i) => i === idx ? { ...x, title: v } : x)
-                          }));
-                        }} />
+                {isChapTitle ? (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, color: C.textMid, marginBottom: 4 }}>章タイトル（1行1章）</div>
+                    <textarea
+                      style={{ ...input(), minHeight: 120, resize: "vertical", fontFamily: font }}
+                      placeholder={"第1章 数と式\n方程式と不等式\n第3章 図形と計量"}
+                      value={chapterTitlesText}
+                      onChange={e => setChapterTitlesText(e.target.value)} />
+                    <div style={{ fontSize: 10, color: C.textMid, marginTop: 4 }}>
+                      「第N章」で始まる行はそのまま使用。それ以外は自動で「第N章」を付与
                     </div>
-                  ))}
-                  <button onClick={() => setTpl(t => ({
-                    ...t, chapters: [...t.chapters, { chapter: (+t.chapters[t.chapters.length-1]?.chapter || 0) + 1, sections: 10 }]
-                  }))} style={{ ...btn(false, C.blue, { padding: "5px", fontSize: 11 }) }}>
-                    + 章を追加
-                  </button>
-                </div>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 10, color: C.textMid, marginBottom: 4 }}>章ごとの節数</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+                      {tpl.chapters.map((c, idx) => (
+                        <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                          <input style={input({ width: 60 })} type="number" min="1"
+                            value={c.chapter ?? ""}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setTpl(t => ({
+                                ...t, chapters: t.chapters.map((x, i) => i === idx
+                                  ? { ...x, chapter: v === "" ? "" : +v }
+                                  : x)
+                              }));
+                            }} />
+                          <span style={{ fontSize: 11, color: C.textMid }}>章 ×</span>
+                          <input style={input({ width: 56 })} type="number" min="1"
+                            value={c.sections ?? ""}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setTpl(t => ({
+                                ...t, chapters: t.chapters.map((x, i) => i === idx
+                                  ? { ...x, sections: v === "" ? "" : +v }
+                                  : x)
+                              }));
+                            }} />
+                          <span style={{ fontSize: 11, color: C.textMid }}>節</span>
+                          {tpl.chapters.length > 1 && (
+                            <button onClick={() => setTpl(t => ({ ...t, chapters: t.chapters.filter((_, i) => i !== idx) }))}
+                              style={{ ...btn(false, C.red, { padding: "4px 8px", fontSize: 10 }) }}>✕</button>
+                          )}
+                          <input style={input({ flex: 1, minWidth: 120 })} placeholder="章タイトル (任意, 例: 数と式)"
+                            value={c.title ?? ""}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setTpl(t => ({
+                                ...t, chapters: t.chapters.map((x, i) => i === idx ? { ...x, title: v } : x)
+                              }));
+                            }} />
+                        </div>
+                      ))}
+                      <button onClick={() => setTpl(t => ({
+                        ...t, chapters: [...t.chapters, { chapter: (+t.chapters[t.chapters.length-1]?.chapter || 0) + 1, sections: 10 }]
+                      }))} style={{ ...btn(false, C.blue, { padding: "5px", fontSize: 11 }) }}>
+                        + 章を追加
+                      </button>
+                    </div>
+                  </>
+                )}
 
                 <div style={{ display: "flex", gap: 6 }}>
                   <button onClick={templateAddTodos} style={{ ...btn(true, activeSubjectData.color, { flex: 1, padding: "8px", fontSize: 12 }) }}>
-                    {totalCount}件追加
+                    {totalCount > 0 ? `${totalCount}件追加` : "追加"}
                   </button>
                   <button onClick={() => setTplOpen(false)} style={{ ...btn(false, C.textMid, { padding: "8px 12px", fontSize: 12 }) }}>
                     キャンセル
