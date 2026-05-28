@@ -1794,6 +1794,7 @@ function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode, 
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkPrefix, setBulkPrefix] = useState(noChapter ? "例題" : (materialMode ? "" : "例題"));
   const [bulkCount, setBulkCount] = useState(5);
+  const [bulkStart, setBulkStart] = useState("");
   const [bulkMinutes, setBulkMinutes] = useState("");
 
   // Extract chapter number from parent text
@@ -1827,8 +1828,10 @@ function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode, 
     if (!n || n < 1) return;
     const items = [];
     const chap = bulkChapter.trim() || "1";
-    for (let i = 1; i <= n; i++) {
-      const text = noChapter ? `${bulkPrefix}${i}` : `${bulkPrefix}${chap}-${i}`;
+    const start = bulkStart.trim() === "" ? 1 : (parseInt(bulkStart) || 1);
+    for (let i = 0; i < n; i++) {
+      const num = start + i;
+      const text = noChapter ? `${bulkPrefix}${num}` : `${bulkPrefix}${chap}-${num}`;
       items.push({
         text,
         minutes: bulkMinutes ? +bulkMinutes : null,
@@ -1837,8 +1840,12 @@ function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode, 
     onBulkAdd(items);
     setBulkOpen(false);
     setBulkCount(5);
+    setBulkStart("");
     setBulkMinutes("");
   };
+
+  const previewStart = bulkStart.trim() === "" ? 1 : (parseInt(bulkStart) || 1);
+  const previewEnd = previewStart + Math.max(0, (parseInt(bulkCount) || 0) - 1);
 
   return (
     <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
@@ -1867,11 +1874,11 @@ function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode, 
           <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>
             プレビュー: <span style={{ color: subjectColor, fontWeight: 700 }}>
               {noChapter
-                ? `${bulkPrefix}1 〜 ${bulkPrefix}${bulkCount}`
-                : `${bulkPrefix}${bulkChapter || "1"}-1 〜 ${bulkPrefix}${bulkChapter || "1"}-${bulkCount}`}
+                ? `${bulkPrefix}${previewStart} 〜 ${bulkPrefix}${previewEnd}`
+                : `${bulkPrefix}${bulkChapter || "1"}-${previewStart} 〜 ${bulkPrefix}${bulkChapter || "1"}-${previewEnd}`}
             </span>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: noChapter ? "2fr 1fr 1fr" : "1.5fr 1fr 1fr 1fr", gap: 6, marginBottom: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: noChapter ? "2fr 1fr 1fr 1fr" : "1.5fr 1fr 1fr 1fr 1fr", gap: 6, marginBottom: 8 }}>
             <label style={{ fontSize: 10, color: C.textMid }}>
               接頭辞
               <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
@@ -1884,6 +1891,12 @@ function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode, 
                   value={bulkChapter} onChange={e => setBulkChapter(e.target.value)} />
               </label>
             )}
+            <label style={{ fontSize: 10, color: C.textMid }}>
+              開始番号
+              <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
+                type="number" min="1" placeholder="1"
+                value={bulkStart} onChange={e => setBulkStart(e.target.value)} />
+            </label>
             <label style={{ fontSize: 10, color: C.textMid }}>
               個数
               <input style={{ ...input({ fontSize: 12, padding: "4px 6px" }) }}
