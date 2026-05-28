@@ -2176,14 +2176,35 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     if (!inWeekly(todo.id)) sendToWeekly(todo);
   };
 
-  const deleteTodo = (id) => {
-    setSubjectTodos(ts => ts.filter(t => t.id !== id && t.parentId !== id));
+  // Collect an id and all its descendants (recursive) from a list
+  const collectWithDescendants = (ids, list) => {
+    const toRemove = new Set(ids);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const t of list) {
+        if (t.parentId && toRemove.has(t.parentId) && !toRemove.has(t.id)) {
+          toRemove.add(t.id);
+          changed = true;
+        }
+      }
+    }
+    return toRemove;
   };
 
-  // Delete multiple todos at once (also removes their children)
+  const deleteTodo = (id) => {
+    setSubjectTodos(ts => {
+      const rm = collectWithDescendants([id], ts);
+      return ts.filter(t => !rm.has(t.id));
+    });
+  };
+
+  // Delete multiple todos at once (also removes all their descendants)
   const deleteTodosBulk = (ids) => {
-    const idSet = new Set(ids);
-    setSubjectTodos(ts => ts.filter(t => !idSet.has(t.id) && !idSet.has(t.parentId)));
+    setSubjectTodos(ts => {
+      const rm = collectWithDescendants(ids, ts);
+      return ts.filter(t => !rm.has(t.id));
+    });
   };
 
   const saveEdit = () => {
@@ -2208,27 +2229,25 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   // Helpers: parent/child relationship via parentId
   const isParent = (t) => !t.parentId;
   const getChildren = (parentId) => subjectTodos.filter(t => t.parentId === parentId).sort((a, b) => a.createdAt - b.createdAt);
+  const hasKids = (id) => subjectTodos.some(t => t.parentId === id);
 
   // Parent status is independent: use its own status only (動画視聴の進捗)
   const parentStatusOf = (todo) => todo.status || (todo.done ? "done" : "unwatched");
 
-  // Total minutes = parent's own minutes + sum of children's minutes
+  // Total minutes = own minutes + sum of all descendants' minutes (recursive)
   const deriveMinutes = (todo) => {
     const own = todo.minutes || 0;
     const children = getChildren(todo.id);
-    return own + children.reduce((s, c) => s + (c.minutes || 0), 0);
+    return own + children.reduce((s, c) => s + deriveMinutes(c), 0);
   };
 
-  // Watched minutes: parent counts if not unwatched, plus children's watched
+  // Watched minutes: count own if reviewing/done, plus all descendants' watched (recursive)
   const watchedMinutesOf = (todo) => {
     let total = 0;
     const pst = parentStatusOf(todo);
     if (pst === "done" || pst === "reviewing") total += todo.minutes || 0;
     const children = getChildren(todo.id);
-    total += children.reduce((s, c) => {
-      const cs = c.status || (c.done ? "done" : "unwatched");
-      return s + ((cs === "done" || cs === "reviewing") ? (c.minutes || 0) : 0);
-    }, 0);
+    total += children.reduce((s, c) => s + watchedMinutesOf(c), 0);
     return total;
   };
 
@@ -2255,6 +2274,10 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
   // UI state: which parents are expanded
   const [expandedParents, setExpandedParents] = useState([]);
+  const [expandedChildren, setExpandedChildren] = useState([]);
+  const toggleExpandedChild = (id) => setExpandedChildren(es =>
+    es.includes(id) ? es.filter(x => x !== id) : [...es, id]
+  );
   // Child select mode (per parent): { parentId: [childIds] } or null when off
   const [childSelectParent, setChildSelectParent] = useState(null); // which parent is in child-select mode
   const [selectedChildren, setSelectedChildren] = useState([]);
@@ -3147,6 +3170,86 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                             ))}
                           </div>
                         )}
+                        {/* Grandchild layer (problems within a section) — material mode only */}
+                        {isMaterialMode && editTodoId !== c.id && childSelectParent !== t.id && (() => {
+                          const gkids = getChildren(c.id);
+                          const gExpanded = expandedChildren.includes(c.id);
+                          return (
+                            <div style={{ marginLeft: 36, marginTop: 6 }}>
+                              <button onClick={() => toggleExpandedChild(c.id)}
+                                style={{ ...btn(gExpanded || gkids.length > 0, C.textMid, { fontSize: 11, padding: "3px 10px", fontWeight: 700 }) }}>
+                                {gExpanded ? "▲ 問題" : "▼ 問題"}{gkids.length > 0 ? ` ${gkids.filter(g => (g.status||(g.done?"done":"unwatched"))==="done").length}/${gkids.length}` : ""}
+                              </button>
+                              {gExpanded && (
+                                <div style={{ marginTop: 6, paddingLeft: 8, borderLeft: `2px solid ${C.border}` }}>
+                                  {gkids.map(g => {
+                                    const gst = g.status || (g.done ? "done" : "unwatched");
+                                    const gInfo = {
+                                      unwatched: { bg: "transparent", color: C.textDim, border: C.border, mark: "" },
+                                      reviewing: { bg: C.yellow, color: "#fff", border: C.yellow, mark: "◐" },
+                                      done: { bg: activeSubjectData.color, color: "#fff", border: activeSubjectData.color, mark: "✓" },
+                                    }[gst];
+                                    const gU = { 1:{label:"わからない",color:C.red},2:{label:"あやふや",color:C.yellow},3:{label:"一応",color:C.blue},4:{label:"万全",color:C.green} }[g.understanding];
+                                    return (
+                                      <div key={g.id} style={{ padding: "4px 0", opacity: gst === "done" ? 0.6 : 1 }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                          <button onClick={() => {
+                                            const next = gst === "unwatched" ? "reviewing" : gst === "reviewing" ? "done" : "unwatched";
+                                            setStatus(g.id, next);
+                                          }} style={{
+                                            width: 26, height: 26, borderRadius: "50%",
+                                            border: `2px solid ${gInfo.border}`, background: gInfo.bg,
+                                            color: gInfo.color, fontSize: 13, fontWeight: 700, cursor: "pointer",
+                                            flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+                                          }}>{gInfo.mark}</button>
+                                          {editTodoId === g.id ? (
+                                            <>
+                                              <input style={{ ...input({ flex: 1 }) }} value={editTodoText}
+                                                onChange={e => setEditTodoText(e.target.value)}
+                                                onKeyDown={e => e.key === "Enter" && saveEdit()} autoFocus />
+                                              <input style={{ ...input({ width: 50 }) }} type="number" placeholder="分" min="0"
+                                                value={editTodoMinutes}
+                                                onChange={e => setEditTodoMinutes(e.target.value)}
+                                                onKeyDown={e => e.key === "Enter" && saveEdit()} />
+                                              <button onClick={saveEdit} style={{ ...btn(true, C.green, { padding: "3px 8px", fontSize: 11 }) }}>保存</button>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <span onClick={() => { setEditTodoId(g.id); setEditTodoText(g.text); setEditTodoMinutes(g.minutes || ""); }}
+                                                style={{ flex: 1, fontSize: 12, color: gst === "done" ? C.textMid : C.text, textDecoration: gst === "done" ? "line-through" : "none", cursor: "pointer", minWidth: 0 }}>{g.text}</span>
+                                              {gU && <span style={{ background: gU.color + "20", color: gU.color, padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600 }}>{gU.label}</span>}
+                                              {g.minutes ? <span style={{ fontSize: 10, color: activeSubjectData.color }}>{fmtH(g.minutes)}</span> : null}
+                                              <button onClick={() => {
+                                                if (confirmDelete === g.id) { deleteTodo(g.id); setConfirmDelete(null); }
+                                                else { setConfirmDelete(g.id); setTimeout(() => setConfirmDelete(cd => cd === g.id ? null : cd), 3000); }
+                                              }} style={{ ...btn(confirmDelete === g.id, C.red, { padding: "2px 7px", fontSize: 10, lineHeight: 1 }) }}>
+                                                {confirmDelete === g.id ? "削除" : "✕"}
+                                              </button>
+                                            </>
+                                          )}
+                                        </div>
+                                        {(gst === "reviewing" || gst === "done") && editTodoId !== g.id && (
+                                          <div style={{ display: "flex", gap: 5, marginTop: 5, marginLeft: 34 }}>
+                                            {[[1,"✕",C.red,"わからない"],[2,"△",C.yellow,"あやふや"],[3,"○",C.blue,"一応"],[4,"◎",C.green,"万全"]].map(([lv,mark,col,lbl]) => (
+                                              <button key={lv} onClick={() => setUnderstanding(g.id, g.understanding === lv ? null : lv)} title={lbl}
+                                                style={{ width: 28, height: 28, borderRadius: 6, background: g.understanding === lv ? col : "transparent", border: `1px solid ${g.understanding === lv ? col : C.border}`, color: g.understanding === lv ? "#fff" : C.textDim, fontSize: 13, fontWeight: 700, cursor: "pointer", padding: 0, lineHeight: 1, fontFamily: font }}>{mark}</button>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                  <ChildAdder
+                                    onAdd={(text) => addChild(c, text)}
+                                    onBulkAdd={(items) => bulkAddChildren(c, items)}
+                                    subjectColor={activeSubjectData.color}
+                                    materialMode={isMaterialMode}
+                                    parentText={c.text} />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}
