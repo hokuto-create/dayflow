@@ -1914,10 +1914,20 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const allCategories = [...new Set([...(subjectCategories || ["CPA勉強"]), ...subjects.map(s => s.category || "CPA勉強")])];
   if (allCategories.length === 0) allCategories.push("CPA勉強");
   const [activeCategory, setActiveCategory] = useState(allCategories[0]);
+  const isMaterialCat = activeCategory && activeCategory !== "CPA勉強";
   const categorySubjects = subjects.filter(s => (s.category || "CPA勉強") === activeCategory);
+  // Group layer (only for non-CPA categories): e.g. "高校数学". Subjects (=教材) carry an optional `group`.
+  const groupsInCategory = [...new Set(categorySubjects.map(s => s.group || "").filter(g => g))];
+  const [activeGroup, setActiveGroup] = useState(groupsInCategory[0] || null);
+  // Subjects shown in the subject(教材) tab row: filtered by group when in material category
+  const visibleSubjects = isMaterialCat
+    ? categorySubjects.filter(s => (s.group || "") === (activeGroup || ""))
+    : categorySubjects;
   const [activeSubject, setActiveSubject] = useState(categorySubjects[0]?.id || null);
   const [showSubjectForm, setShowSubjectForm] = useState(false);
-  const [newSubject, setNewSubject] = useState({ name: "", color: C.blue });
+  const [newSubject, setNewSubject] = useState({ name: "", color: C.blue, group: "" });
+  const [showGroupForm, setShowGroupForm] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
   const [newTodo, setNewTodo] = useState("");
   const [newTodoMinutes, setNewTodoMinutes] = useState("");
   const [editTodoId, setEditTodoId] = useState(null);
@@ -1929,6 +1939,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [editSubjectId, setEditSubjectId] = useState(null);
   const [editSubjectName, setEditSubjectName] = useState("");
   const [editSubjectColor, setEditSubjectColor] = useState("");
+  const [editSubjectGroup, setEditSubjectGroup] = useState("");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedTodos, setSelectedTodos] = useState([]);
   const [bulkMonthPicker, setBulkMonthPicker] = useState(false);
@@ -1939,25 +1950,53 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
   const COLORS = [C.blue, C.green, C.accent, C.purple, C.red, C.yellow];
 
-  // Switch active subject when category changes
+  // When category changes: pick first group (material cat) and a sensible active subject
   useEffect(() => {
     const subsInCat = subjects.filter(s => (s.category || "CPA勉強") === activeCategory);
+    const mat = activeCategory && activeCategory !== "CPA勉強";
+    if (mat) {
+      const grps = [...new Set(subsInCat.map(s => s.group || "").filter(g => g))];
+      if (!grps.includes(activeGroup)) {
+        setActiveGroup(grps[0] || null);
+      }
+    }
     if (!subsInCat.some(s => s.id === activeSubject)) {
       setActiveSubject(subsInCat[0]?.id || null);
     }
   }, [activeCategory, subjects]);
 
+  // When group changes (material category): switch active subject into that group
   useEffect(() => {
-    if (!activeSubject && categorySubjects.length > 0) setActiveSubject(categorySubjects[0].id);
+    if (!isMaterialCat) return;
+    const inGroup = categorySubjects.filter(s => (s.group || "") === (activeGroup || ""));
+    if (!inGroup.some(s => s.id === activeSubject)) {
+      setActiveSubject(inGroup[0]?.id || null);
+    }
+  }, [activeGroup]);
+
+  useEffect(() => {
+    if (!activeSubject && visibleSubjects.length > 0) setActiveSubject(visibleSubjects[0].id);
   }, [subjects, activeSubject]);
 
   const addSubject = () => {
     if (!newSubject.name.trim()) return;
     const id = genId();
-    setSubjects(ss => [...ss, { id, ...newSubject, category: activeCategory }]);
+    const grp = isMaterialCat ? (activeGroup || newSubject.group || "") : "";
+    setSubjects(ss => [...ss, { id, name: newSubject.name, color: newSubject.color, category: activeCategory, group: grp }]);
     setActiveSubject(id);
-    setNewSubject({ name: "", color: C.blue });
+    setNewSubject({ name: "", color: C.blue, group: "" });
     setShowSubjectForm(false);
+  };
+
+  // Add a new group (科目) within the current material category
+  const addGroup = () => {
+    const name = newGroupName.trim();
+    if (!name) return;
+    setActiveGroup(name);
+    setNewGroupName("");
+    setShowGroupForm(false);
+    // A group becomes "real" once it has a subject; opening the subject form helps the user add one
+    setShowSubjectForm(true);
   };
 
   const deleteSubject = (id) => {
@@ -2162,8 +2201,6 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
   // Material mode: when category is not "CPA勉強", use textbook-oriented labels
   const isMaterialMode = activeSubjectData && activeSubjectData.category && activeSubjectData.category !== "CPA勉強";
-  // Category-level material flag (for the add form, which depends on active category not selected subject)
-  const isMaterialCategory = activeCategory && activeCategory !== "CPA勉強";
   const L = isMaterialMode
     ? { unwatched: "未着手", done: "完了", progressLabel: "取り組み:" }
     : { unwatched: "未視聴", done: "視聴済", progressLabel: "動画:" };
@@ -2252,7 +2289,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
   return (
     <div style={{ padding: 16, maxWidth: 600, margin: "0 auto", display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ fontFamily: serif, fontSize: 18, color: C.text, textAlign: "center" }}>{isMaterialCategory ? "教材別TODO" : "科目別TODO"}</div>
+      <div style={{ fontFamily: serif, fontSize: 18, color: C.text, textAlign: "center" }}>{isMaterialCat ? "教材別TODO" : "科目別TODO"}</div>
 
       {/* Category tabs */}
       <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
@@ -2303,9 +2340,63 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         }}>+ カテゴリ</button>
       </div>
 
-      {/* Subject tabs (filtered by category) */}
-      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
-        {categorySubjects.map(s => (
+      {/* Group (科目) tabs — only for material categories */}
+      {isMaterialCat && (
+        <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: C.textMid, flexShrink: 0 }}>科目:</span>
+          {groupsInCategory.map(g => {
+            const isActive = (activeGroup || "") === g;
+            const cnt = categorySubjects.filter(s => (s.group || "") === g).length;
+            return (
+              <div key={g} style={{ display: "flex", flexShrink: 0 }}>
+                <button onClick={() => setActiveGroup(g)}
+                  style={{
+                    padding: "5px 11px", borderRadius: cnt === 0 ? "12px 0 0 12px" : 12,
+                    background: isActive ? C.accent : C.surface,
+                    color: isActive ? "#fff" : C.textMid,
+                    border: `1px solid ${isActive ? C.accent : C.border}`,
+                    fontSize: 12, fontFamily: font, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+                    borderRight: cnt === 0 ? "none" : undefined,
+                  }}>{g}</button>
+                {cnt === 0 && (
+                  <button onClick={() => { if (activeGroup === g) setActiveGroup(groupsInCategory.filter(x => x !== g)[0] || null); }}
+                    style={{
+                      padding: "5px 7px", borderRadius: "0 12px 12px 0",
+                      background: isActive ? C.accent : C.surface,
+                      color: isActive ? "#fff" : C.red,
+                      border: `1px solid ${isActive ? C.accent : C.border}`, borderLeft: "none",
+                      fontSize: 11, cursor: "pointer",
+                    }}>✕</button>
+                )}
+              </div>
+            );
+          })}
+          <button onClick={() => { setShowGroupForm(v => !v); setShowSubjectForm(false); }}
+            style={{
+              padding: "5px 11px", borderRadius: 12, background: "transparent",
+              color: C.blue, border: `1px dashed ${C.blue}`,
+              fontSize: 12, fontFamily: font, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+            }}>+ 科目</button>
+        </div>
+      )}
+
+      {/* Add group form */}
+      {isMaterialCat && showGroupForm && (
+        <div style={card()}>
+          <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>新しい科目（例：高校数学、英語）</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input style={input({ flex: 1 })} placeholder="科目名"
+              value={newGroupName} onChange={e => setNewGroupName(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && addGroup()} autoFocus />
+            <button onClick={addGroup} style={{ ...btn(true, C.blue, { padding: "0 18px" }) }}>追加</button>
+          </div>
+        </div>
+      )}
+
+      {/* Subject(=教材) tabs (filtered by category, and group for material categories) */}
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, alignItems: "center" }}>
+        {isMaterialCat && <span style={{ fontSize: 11, color: C.textMid, flexShrink: 0 }}>教材:</span>}
+        {visibleSubjects.map(s => (
           <button key={s.id} onClick={() => setActiveSubject(s.id)}
             style={{
               padding: "8px 14px", borderRadius: 8,
@@ -2318,18 +2409,21 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
             {s.name}
           </button>
         ))}
-        <button onClick={() => setShowSubjectForm(!showSubjectForm)}
-          style={{
-            padding: "8px 12px", borderRadius: 8, background: "transparent",
-            color: C.accent, border: `1px dashed ${C.accent}`,
-            fontSize: 13, fontFamily: font, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
-          }}>+ {isMaterialCategory ? "教材" : "科目"}</button>
+        {(!isMaterialCat || activeGroup) && (
+          <button onClick={() => { setShowSubjectForm(!showSubjectForm); setShowGroupForm(false); }}
+            style={{
+              padding: "8px 12px", borderRadius: 8, background: "transparent",
+              color: C.accent, border: `1px dashed ${C.accent}`,
+              fontSize: 13, fontFamily: font, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+            }}>+ {isMaterialCat ? "教材" : "科目"}</button>
+        )}
       </div>
 
       {/* Add subject form */}
-      {showSubjectForm && (
+      {showSubjectForm && (!isMaterialCat || activeGroup) && (
         <div style={card()}>
-          <input style={input({ marginBottom: 10 })} placeholder={isMaterialCategory ? "教材名（例：赤チャート数学Ⅰ）" : "科目名（例：財務会計）"}
+          {isMaterialCat && <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>「{activeGroup}」に教材を追加</div>}
+          <input style={input({ marginBottom: 10 })} placeholder={isMaterialCat ? "教材名（例：赤チャート数学Ⅰ）" : "科目名（例：財務会計）"}
             value={newSubject.name} onChange={e => setNewSubject(s => ({ ...s, name: e.target.value }))} />
           <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>カラー</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -2372,7 +2466,9 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       const cur = activeSubjectData.category || "CPA勉強";
                       return (
                         <button key={cat} onClick={() => {
-                          setSubjects(ss => ss.map(s => s.id === editSubjectId ? { ...s, category: cat } : s));
+                          setSubjects(ss => ss.map(s => s.id === editSubjectId
+                            ? { ...s, category: cat, group: cat === "CPA勉強" ? "" : (s.group || "") }
+                            : s));
                           if (cat !== activeCategory) setActiveCategory(cat);
                         }} style={{
                           padding: "4px 10px", borderRadius: 12,
@@ -2384,10 +2480,34 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       );
                     })}
                   </div>
+                  {isMaterialCat && (
+                    <>
+                      <div style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>科目（グループ）</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+                        {groupsInCategory.map(g => (
+                          <button key={g} onClick={() => setEditSubjectGroup(g)}
+                            style={{
+                              padding: "4px 10px", borderRadius: 12,
+                              background: editSubjectGroup === g ? C.accent : C.surfaceUp,
+                              color: editSubjectGroup === g ? "#fff" : C.textMid,
+                              border: `1px solid ${editSubjectGroup === g ? C.accent : C.border}`,
+                              fontSize: 11, fontFamily: font, cursor: "pointer",
+                            }}>{g}</button>
+                        ))}
+                        <input style={input({ width: 120, fontSize: 11, padding: "4px 8px" })}
+                          placeholder="新しい科目名"
+                          value={groupsInCategory.includes(editSubjectGroup) ? "" : editSubjectGroup}
+                          onChange={e => setEditSubjectGroup(e.target.value)} />
+                      </div>
+                    </>
+                  )}
                   <div style={{ display: "flex", gap: 6 }}>
                     <button onClick={() => {
                       if (!editSubjectName.trim()) return;
-                      setSubjects(ss => ss.map(s => s.id === editSubjectId ? { ...s, name: editSubjectName, color: editSubjectColor } : s));
+                      setSubjects(ss => ss.map(s => s.id === editSubjectId
+                        ? { ...s, name: editSubjectName, color: editSubjectColor, ...(isMaterialCat ? { group: editSubjectGroup.trim() } : {}) }
+                        : s));
+                      if (isMaterialCat && editSubjectGroup.trim()) setActiveGroup(editSubjectGroup.trim());
                       setEditSubjectId(null);
                     }} style={{ ...btn(true, C.green, { padding: "5px 12px", fontSize: 12 }) }}>保存</button>
                     <button onClick={() => setEditSubjectId(null)}
@@ -2399,6 +2519,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   setEditSubjectId(activeSubjectData.id);
                   setEditSubjectName(activeSubjectData.name);
                   setEditSubjectColor(activeSubjectData.color);
+                  setEditSubjectGroup(activeSubjectData.group || "");
                 }} style={{ cursor: "pointer" }}>
                   <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>
                     {activeSubjectData.name}
@@ -3044,7 +3165,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         </>
       ) : (
         <div style={{ ...card(), textAlign: "center", padding: 30, color: C.textMid }}>
-          {isMaterialCategory ? "教材を追加してください" : "科目を追加してください"}
+          {isMaterialCat ? "教材を追加してください" : "科目を追加してください"}
         </div>
       )}
 
