@@ -1450,6 +1450,32 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
   const dayTasks = tasks.filter(t => t.date === selectedDate).sort((a, b) => (a.hour ?? 99) - (b.hour ?? 99));
   const done = dayTasks.filter(t => t.done);
   const notDone = dayTasks.filter(t => !t.done);
+
+  // For a review task, derive the textbook (TX) label from its source todo.
+  // Example problems (例題) are stored as children of a TX chapter and don't
+  // carry the TX number in their own title, so we inherit it from the parent
+  // chapter's text (e.g. "TX5-1 本支店会計" → "tx5"). Returns null for
+  // non-review tasks, when no source todo is found, or when the title already
+  // shows the TX number.
+  const reviewTxLabel = (task) => {
+    if (!task.isReview || !task.subjectTodoId) return null;
+    const todo = subjectTodos.find(s => s.id === task.subjectTodoId);
+    if (!todo) return null;
+    const source = todo.parentId ? subjectTodos.find(s => s.id === todo.parentId) : todo;
+    const text = (source && source.text) || todo.text || "";
+    const m = text.match(/TX\s*(\d+)/i);
+    if (!m) return null;
+    if (task.title.toLowerCase().includes(`tx${m[1]}`)) return null;
+    return `tx${m[1]}`;
+  };
+  const reviewDisplayTitle = (task) => {
+    const txLabel = reviewTxLabel(task);
+    if (!txLabel) return task.title;
+    const PREFIX = "復習: ";
+    return task.title.startsWith(PREFIX)
+      ? `${PREFIX}${txLabel} ${task.title.slice(PREFIX.length)}`
+      : `${txLabel} ${task.title}`;
+  };
   const rate = dayTasks.length ? Math.round((done.length / dayTasks.length) * 100) : 0;
 
   const tomorrow = addDays(selectedDate, 1);
@@ -1532,7 +1558,7 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
           <div style={{ fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 8, letterSpacing: 1 }}>○ 未完了</div>
           {notDone.map(t => (
             <div key={t.id} style={{ padding: "7px 0", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 13, color: C.text, flex: 1 }}>{t.title}</span>
+              <span style={{ fontSize: 13, color: C.text, flex: 1 }}>{reviewDisplayTitle(t)}</span>
               {carriedIds.includes(t.id) ? (
                 <span style={{ fontSize: 11, color: C.green, fontWeight: 700, padding: "3px 9px" }}>✓ 繰越済</span>
               ) : (
