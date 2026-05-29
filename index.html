@@ -599,6 +599,24 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
     setUnderstandingModal(null);
   };
 
+  // For a review task, derive the textbook (TX) label from its source todo.
+  // Example problems (例題) are stored as children of a TX chapter and don't
+  // carry the TX number in their own title, so we inherit it from the parent
+  // chapter's text (e.g. "TX5-1 本支店会計" → "tx5"). Returns null for
+  // non-review tasks, when no source todo is found, or when the title already
+  // shows the TX number (so normal chapter reviews are left untouched).
+  const reviewTxLabel = (task) => {
+    if (!task.isReview || !task.subjectTodoId) return null;
+    const todo = subjectTodos.find(s => s.id === task.subjectTodoId);
+    if (!todo) return null;
+    const source = todo.parentId ? subjectTodos.find(s => s.id === todo.parentId) : todo;
+    const text = (source && source.text) || todo.text || "";
+    const m = text.match(/TX\s*(\d+)/i);
+    if (!m) return null;
+    if (task.title.toLowerCase().includes(`tx${m[1]}`)) return null;
+    return `tx${m[1]}`;
+  };
+
   const toggleDone = (task) => {
     // If unchecking, just uncheck
     if (task.done) {
@@ -724,6 +742,13 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           </div>
           {unscheduledTasks.map(t => {
             const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
+            const txLabel = reviewTxLabel(t);
+            const PREFIX = "復習: ";
+            const displayTitle = txLabel
+              ? (t.title.startsWith(PREFIX)
+                  ? `${PREFIX}${txLabel} ${t.title.slice(PREFIX.length)}`
+                  : `${txLabel} ${t.title}`)
+              : t.title;
             return (
               <div key={t.id} style={{
                 display: "flex", alignItems: "center", gap: 8,
@@ -738,7 +763,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   <div style={{ fontSize: 13, color: C.text, fontWeight: 500,
                     textDecoration: t.done ? "line-through" : "none",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
-                  }}>{t.title}</div>
+                  }}>{displayTitle}</div>
                   <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
                     {fmtDur(t.duration)}
                     {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
