@@ -2054,9 +2054,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [selectedTodos, setSelectedTodos] = useState([]);
   const [bulkMonthPicker, setBulkMonthPicker] = useState(false);
   const [bulkMonthIds, setBulkMonthIds] = useState([]); // which todo ids the month picker acts on (parent/child/grandchild)
-  const [bulkAddOpen, setBulkAddOpen] = useState(false);
+  const [addTab, setAddTab] = useState("single"); // "single" | "bulk" | "seq" — unified 追加タブ
   const [bulkText, setBulkText] = useState("");
-  const [tplOpen, setTplOpen] = useState(false);
   const [tpl, setTpl] = useState({ prefix: "TX", chapters: [{ chapter: 1, sections: 10 }], suffix: "", minutes: 60, numberingMode: "perChapter" });
   const [chapterTitlesText, setChapterTitlesText] = useState("");
   // Auto-distribute (自動分配): spread a subject's remaining units across days
@@ -2164,7 +2163,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       status: "unwatched", done: false, createdAt: now + i,
     }))]);
     setBulkText("");
-    setBulkAddOpen(false);
+    setAddTab("single");
   };
 
   const templateAddTodos = () => {
@@ -2185,7 +2184,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       });
       if (items.length) setSubjectTodos(ts => [...ts, ...items]);
       setChapterTitlesText("");
-      setTplOpen(false);
+      setAddTab("single");
       return;
     }
 
@@ -2217,7 +2216,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       }
     });
     if (items.length) setSubjectTodos(ts => [...ts, ...items]);
-    setTplOpen(false);
+    setAddTab("single");
   };
 
   const setStatus = (id, status) => {
@@ -2847,41 +2846,41 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
             )}
           </div>
 
-          {/* Add todo */}
-          <div style={{ display: "flex", gap: 6 }}>
-            <input style={input({ flex: 1 })} placeholder="やることを入力..."
-              value={newTodo} onChange={e => setNewTodo(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && addTodo()} />
-            <input style={input({ width: 60 })} type="number" placeholder="分" min="0"
-              value={newTodoMinutes} onChange={e => setNewTodoMinutes(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && addTodo()} />
-            <button onClick={addTodo} style={{ ...btn(true, activeSubjectData.color, { padding: "0 18px", fontSize: 16 }) }}>+</button>
+          {/* 追加タブ: 1件ずつ / まとめて / 連番 */}
+          <div style={{ display: "flex", gap: 4, background: C.surfaceUp, padding: 3, borderRadius: 8 }}>
+            {[
+              ["single", "✏️ 1件ずつ"],
+              ["bulk", "📝 まとめて"],
+              ["seq", "📐 連番"],
+            ].map(([key, label]) => (
+              <button key={key} onClick={() => {
+                // When switching to 連番 in material mode, default prefix to empty (number-only)
+                if (key === "seq" && isMaterialMode) setTpl(t => (t.prefix === "TX" ? { ...t, prefix: "" } : t));
+                setAddTab(key);
+              }} style={{
+                flex: 1, padding: "6px 4px", borderRadius: 6, border: "none",
+                background: addTab === key ? activeSubjectData.color : "transparent",
+                color: addTab === key ? "#fff" : C.textMid,
+                fontFamily: font, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+              }}>{label}</button>
+            ))}
           </div>
 
-          {/* Bulk/Template add toggles */}
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => { setBulkAddOpen(b => !b); setTplOpen(false); }}
-              style={{ ...btn(bulkAddOpen, C.textMid, { flex: 1, fontSize: 11, padding: "5px" }) }}>
-              📝 まとめて追加
-            </button>
-            <button onClick={() => {
-              setTplOpen(prev => {
-                const next = !prev;
-                // When opening in material mode, default prefix to empty (number-only)
-                if (next && isMaterialMode) {
-                  setTpl(t => (t.prefix === "TX" ? { ...t, prefix: "" } : t));
-                }
-                return next;
-              });
-              setBulkAddOpen(false);
-            }}
-              style={{ ...btn(tplOpen, C.textMid, { flex: 1, fontSize: 11, padding: "5px" }) }}>
-              📐 連番で追加
-            </button>
-          </div>
+          {/* 1件ずつ追加 */}
+          {addTab === "single" && (
+            <div style={{ display: "flex", gap: 6 }}>
+              <input style={input({ flex: 1 })} placeholder="やることを入力..."
+                value={newTodo} onChange={e => setNewTodo(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && addTodo()} />
+              <input style={input({ width: 60 })} type="number" placeholder="分" min="0"
+                value={newTodoMinutes} onChange={e => setNewTodoMinutes(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && addTodo()} />
+              <button onClick={addTodo} style={{ ...btn(true, activeSubjectData.color, { padding: "0 18px", fontSize: 16 }) }}>+</button>
+            </div>
+          )}
 
-          {/* Bulk add form */}
-          {bulkAddOpen && (
+          {/* まとめて追加 */}
+          {addTab === "bulk" && (
             <div style={{ ...card({ padding: 12, background: C.surfaceUp }) }}>
               <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>
                 1行1TODO、末尾に半角スペース＋分数で時間も指定可能
@@ -2893,15 +2892,15 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 <button onClick={bulkAddTodos} style={{ ...btn(true, activeSubjectData.color, { flex: 1, padding: "8px", fontSize: 12 }) }}>
                   {bulkText.split("\n").filter(l => l.trim()).length}件追加
                 </button>
-                <button onClick={() => { setBulkText(""); setBulkAddOpen(false); }} style={{ ...btn(false, C.textMid, { padding: "8px 12px", fontSize: 12 }) }}>
+                <button onClick={() => { setBulkText(""); setAddTab("single"); }} style={{ ...btn(false, C.textMid, { padding: "8px 12px", fontSize: 12 }) }}>
                   キャンセル
                 </button>
               </div>
             </div>
           )}
 
-          {/* Template add form */}
-          {tplOpen && (() => {
+          {/* 連番で追加 */}
+          {addTab === "seq" && (() => {
             const isChapTitle = tpl.numberingMode === "chapterTitle";
             const parsedChapterTitles = isChapTitle ? parseChapterTitles(chapterTitlesText) : [];
             const totalCount = isChapTitle
@@ -3064,7 +3063,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   <button onClick={templateAddTodos} style={{ ...btn(true, activeSubjectData.color, { flex: 1, padding: "8px", fontSize: 12 }) }}>
                     {totalCount > 0 ? `${totalCount}件追加` : "追加"}
                   </button>
-                  <button onClick={() => setTplOpen(false)} style={{ ...btn(false, C.textMid, { padding: "8px 12px", fontSize: 12 }) }}>
+                  <button onClick={() => setAddTab("single")} style={{ ...btn(false, C.textMid, { padding: "8px 12px", fontSize: 12 }) }}>
                     キャンセル
                   </button>
                 </div>
