@@ -164,6 +164,12 @@ const SAMPLE_SUBJECTS = [
   { id: "s_theory", name: "財理", color: "#3a9d6e" },
   { id: "s_mgmt", name: "管理会計", color: "#d4a528" },
   { id: "s_law", name: "企業法", color: "#4a8ed1" },
+  // 趣味勉強 > 高校数学 > 赤チャート（教材＝数学Ⅰ/A/Ⅱ/B/Ⅲ）
+  { id: "rc_math1", name: "赤チャート数学Ⅰ", color: "#d14545", category: "趣味勉強", group: "高校数学" },
+  { id: "rc_mathA", name: "赤チャート数学A", color: "#3a9d6e", category: "趣味勉強", group: "高校数学" },
+  { id: "rc_math2", name: "赤チャート数学Ⅱ", color: "#4a8ed1", category: "趣味勉強", group: "高校数学" },
+  { id: "rc_mathB", name: "赤チャート数学B", color: "#8b6fcc", category: "趣味勉強", group: "高校数学" },
+  { id: "rc_math3", name: "赤チャート数学Ⅲ", color: "#d4a528", category: "趣味勉強", group: "高校数学" },
 ];
 
 // helper: build a todo (sequential createdAt counter)
@@ -482,6 +488,159 @@ const SAMPLE_SUBJECT_TODOS = [
   _td("s_law", "金商法(5)大量保有報告制度", 33),
   _td("s_law", "金商法(6)規制違反の責任", 35),
 ];
+
+/* ── 赤チャート（趣味勉強 > 高校数学）TODOデータ ──
+   各教材（数学Ⅰ/A/Ⅱ/B/Ⅲ）ごとに、章＝親TODO、例題＝子TODOで構成する。
+   ・例題番号は教科書通り「教材ごとの連番」（章をまたいで通し番号）。
+   ・各例題には1対1で「練習」が付くが、例題とペアで取り組むため例題TODOに含める。
+   ・演習問題・総合演習は全章を終えた後に取り組む独立TODO。
+   chapters[].examples は例題のサブタイトル（例題名）を順に並べた配列。
+   写真から読み取り次第、各章の examples を追記していく。 */
+const RED_CHART_BOOKS = [
+  {
+    id: "rc_math1", exercises: 57,
+    chapters: [
+      { title: "数と式", examples: [
+        "同類項の整理と次数・定数項", "整式の加法・減法", "単項式の乗法", "整式の乗法",
+        "展開公式の利用", "おき換えによる展開", "組み合わせの工夫", "複雑な積の展開",
+        "因数分解（基本，2次式の公式利用）", "因数分解（たすき掛け）", "3次式の因数分解",
+        "おき換えの利用", "1文字について整理", "x，yの2元2次式の因数分解", "対称式・交代式",
+        "複2次式", "a³+b³+c³−3abc の形の式の因数分解", "やや複雑な因数分解", "循環小数",
+        "絶対値の基本，数直線上の2点間の距離", "平方根の計算", "分母の有理化", "√A²の扱い方",
+        "2重根号", "整数部分，小数部分", "平方根と式の値(1)", "平方根と式の値(2)",
+        "平方根と式の値(3)", "平方根と式の値(4)", "不等式の性質と式の値の範囲", "1次不等式の解法",
+        "連立不等式", "不等式の整数解と定数の範囲", "連立方程式の解法", "絶対値を含む方程式・不等式",
+        "絶対値を含む方程式・不等式", "文字係数の方程式，不等式", "文字係数の方程式，連立方程式",
+        "方程式の応用問題", "1次不等式の応用問題",
+      ] },
+      { title: "集合と命題", examples: [
+        "部分集合と包含関係", "2つの集合の共通部分，和集合，補集合", "不等式で表される集合",
+        "集合の要素の決定", "3つの集合の共通部分，和集合", "包含関係の証明(1)", "包含関係の証明(2)",
+        "集合の相等の証明", "命題の真偽", "命題の真偽と集合", "条件の否定", "「すべて」，「ある」の否定",
+        "命題 p⟹q の否定", "必要条件・十分条件", "必要条件を求め，十分条件か吟味(1)",
+        "必要条件を求め，十分条件か吟味(2)", "逆・裏・対偶", "対偶を利用した証明", "背理法による証明",
+        "√2は無理数の証明", "有理数と無理数の等式", "方程式の解と背理法", "転換法",
+      ] },
+      { title: "2次関数", examples: [] },
+      { title: "図形と計量", examples: [] },
+      { title: "データの分析", examples: [] },
+    ],
+  },
+  {
+    id: "rc_mathA", exercises: 69,
+    chapters: [
+      { title: "場合の数", examples: [] },
+      { title: "確率", examples: [] },
+      { title: "図形の性質", examples: [] },
+      { title: "整数の性質", examples: [] },
+    ],
+  },
+  {
+    id: "rc_math2", exercises: 88,
+    chapters: [
+      { title: "式と証明", examples: [] },
+      { title: "複素数と方程式", examples: [] },
+      { title: "図形と方程式", examples: [] },
+      { title: "三角関数", examples: [] },
+      { title: "指数関数・対数関数", examples: [] },
+      { title: "微分法", examples: [] },
+      { title: "積分法", examples: [] },
+    ],
+  },
+  {
+    id: "rc_mathB", exercises: 47,
+    chapters: [
+      { title: "平面上のベクトル", examples: [] },
+      { title: "空間のベクトル", examples: [] },
+      { title: "数列", examples: [] },
+    ],
+  },
+  {
+    id: "rc_math3", exercises: 100,
+    chapters: [
+      { title: "複素数平面", examples: [] },
+      { title: "式と曲線", examples: [] },
+      { title: "関数", examples: [] },
+      { title: "極限", examples: [] },
+      { title: "微分法", examples: [] },
+      { title: "微分法の応用", examples: [] },
+      { title: "積分法", examples: [] },
+      { title: "積分法の応用", examples: [] },
+    ],
+  },
+];
+
+// 総合演習（第1部＝問題＋類題、第2部＝主題＋試練）。
+// ⅠAはⅠ・Aの合本、ⅡBはⅡ・Bの合本、ⅢはⅢ単独。各部の問題数を写真から読み取り次第設定する。
+// attach: どの教材TODOの末尾に置くか（合本の後ろの教材に付ける）。
+const RED_CHART_SOGO = [
+  // { label: "数学ⅠA", attach: "rc_mathA", part1: 0, part2: 0 },
+  // { label: "数学ⅡB", attach: "rc_mathB", part1: 0, part2: 0 },
+  // { label: "数学Ⅲ",  attach: "rc_math3", part1: 0, part2: 0 },
+];
+
+let _rcSeq = 100000; // CPAシード(_todoSeq)と十分離した連番
+function buildRedChartTodos(books, sogo) {
+  const out = [];
+  books.forEach(book => {
+    let exNo = 0; // 例題番号（教材ごとの通し番号）
+    book.chapters.forEach((ch, ci) => {
+      const parentId = `${book.id}_ch${ci + 1}`;
+      out.push({
+        id: parentId, subjectId: book.id,
+        text: `第${ci + 1}章 ${ch.title}`,
+        minutes: null, status: "unwatched", done: false, createdAt: ++_rcSeq,
+      });
+      (ch.examples || []).forEach(sub => {
+        exNo++;
+        out.push({
+          id: genId(), subjectId: book.id, parentId,
+          text: `例題${exNo} ${sub}`,
+          minutes: null, status: "unwatched", done: false, createdAt: ++_rcSeq,
+        });
+      });
+    });
+    // 演習問題（全章の後に取り組む独立TODO）
+    if (book.exercises) {
+      const exParentId = `${book.id}_exercises`;
+      out.push({
+        id: exParentId, subjectId: book.id,
+        text: `演習問題（全${book.exercises}問）`,
+        minutes: null, status: "unwatched", done: false, createdAt: ++_rcSeq,
+      });
+      for (let i = 1; i <= book.exercises; i++) {
+        out.push({
+          id: genId(), subjectId: book.id, parentId: exParentId,
+          text: `演習問題${i}`,
+          minutes: null, status: "unwatched", done: false, createdAt: ++_rcSeq,
+        });
+      }
+    }
+  });
+  // 総合演習
+  (sogo || []).forEach(sg => {
+    const mkPart = (partNo, label, count, itemLabel, pairLabel) => {
+      if (!count) return;
+      const pId = `${sg.attach}_sogo_p${partNo}`;
+      out.push({
+        id: pId, subjectId: sg.attach,
+        text: `総合演習（${sg.label}）第${partNo}部 ${label}（全${count}問）`,
+        minutes: null, status: "unwatched", done: false, createdAt: ++_rcSeq,
+      });
+      for (let i = 1; i <= count; i++) {
+        out.push({
+          id: genId(), subjectId: sg.attach, parentId: pId,
+          text: `${itemLabel}${i}`, // ${pairLabel}は1対1で付くためペアで取り組む
+          minutes: null, status: "unwatched", done: false, createdAt: ++_rcSeq,
+        });
+      }
+    };
+    mkPart(1, "問題", sg.part1, "問題", "類題");
+    mkPart(2, "主題", sg.part2, "主題", "試練");
+  });
+  return out;
+}
+SAMPLE_SUBJECT_TODOS.push(...buildRedChartTodos(RED_CHART_BOOKS, RED_CHART_SOGO));
 
 /* ── SHARED STYLES ── */
 const card = (extra = {}) => ({
@@ -5148,7 +5307,7 @@ function App() {
   const [tasks, setTasks] = usePersistedState("tasks", makeSampleTasks(today));
   const [goals, setGoals] = usePersistedState("goals", SAMPLE_GOALS);
   const [subjects, setSubjects] = usePersistedState("subjects", SAMPLE_SUBJECTS);
-  const [subjectCategories, setSubjectCategories] = usePersistedState("subjectCategories", ["CPA勉強"]);
+  const [subjectCategories, setSubjectCategories] = usePersistedState("subjectCategories", ["CPA勉強", "趣味勉強"]);
   const [subjectTodos, setSubjectTodos] = usePersistedState("subjectTodos", SAMPLE_SUBJECT_TODOS);
   const [monthlyPlans, setMonthlyPlans] = usePersistedState("monthlyPlans", []);
   const [weeklyPlans, setWeeklyPlans] = usePersistedState("weeklyPlans", []);
