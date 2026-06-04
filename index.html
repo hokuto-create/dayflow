@@ -2017,7 +2017,9 @@ function ChildAdder({ onAdd, onBulkAdd, subjectColor, parentText, materialMode, 
   );
 }
 
-function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeeklyPlans, tasks, setTasks, selectedDate, goals, subjectCategories, setSubjectCategories }) {
+function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeeklyPlans, tasks, setTasks, selectedDate, goals, subjectCategories, setSubjectCategories, settings }) {
+  const autoMode = (settings?.scheduleMode ?? "auto") === "auto";
+  const chunkBoundary = settings?.chunkBoundary ?? true;
   // Categories: persisted list, plus any from existing subjects
   const allCategories = [...new Set([...(subjectCategories || ["CPA勉強"]), ...subjects.map(s => s.category || "CPA勉強")])];
   if (allCategories.length === 0) allCategories.push("CPA勉強");
@@ -2335,13 +2337,38 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     setAutoDistIds(list);
   };
 
+  // All descendants (例題 etc.) of a todo, depth-first.
+  const descendantsOf = (id) => {
+    const out = [];
+    const rec = (pid) => getChildren(pid).forEach(c => { out.push(c); rec(c.id); });
+    rec(id);
+    return out;
+  };
+  // Own duration in hours (excludes children); 0 if no own minutes.
+  const ownDur = (t) => (t.minutes ? Math.max(1/60, t.minutes / 60) : 0);
+
   // Target units (sorted in textbook order) with their durations in hours.
-  const autoDistUnits = () => (autoDistIds || [])
-    .map(id => subjectTodos.find(t => t.id === id))
-    .filter(Boolean)
-    .filter(t => parentStatusOf(t) !== "done")
-    .sort((a, b) => a.createdAt - b.createdAt)
-    .map(t => ({ todo: t, dur: todoDuration(t) }));
+  // chunkBoundary ON  → 大問+例題を1セット(1タスク)として扱う。
+  // chunkBoundary OFF → 大問本体と各例題を個別の小ユニットに分けて配分する。
+  const autoDistUnits = () => {
+    const parents = (autoDistIds || [])
+      .map(id => subjectTodos.find(t => t.id === id))
+      .filter(Boolean)
+      .filter(t => parentStatusOf(t) !== "done")
+      .sort((a, b) => a.createdAt - b.createdAt);
+    const units = [];
+    parents.forEach(p => {
+      if (chunkBoundary) {
+        units.push({ todo: p, dur: todoDuration(p) });
+        return;
+      }
+      const pieces = [{ t: p, d: ownDur(p) }, ...descendantsOf(p.id).map(k => ({ t: k, d: ownDur(k) }))]
+        .filter(x => x.d > 0);
+      if (pieces.length === 0) units.push({ todo: p, dur: 1 });
+      else pieces.forEach(x => units.push({ todo: x.t, dur: x.d }));
+    });
+    return units;
+  };
 
   // Greedy placement of units onto days. Returns [{ todo, date }].
   const computeAutoPlacements = (units) => {
@@ -2357,7 +2384,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       let di = 0, load = 0;
       for (const u of units) {
         if (load > 0 && load + u.dur > target + 1e-9 && di < days.length - 1) { di++; load = 0; }
-        placements.push({ todo: u.todo, date: days[di] });
+        placements.push({ todo: u.todo, dur: u.dur, date: days[di] });
         load += u.dur;
       }
     } else {
@@ -2365,7 +2392,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       let di = 0, load = 0;
       for (const u of units) {
         if (load > 0 && load + u.dur > target + 1e-9) { di++; load = 0; }
-        placements.push({ todo: u.todo, date: nthActiveDay(start, weekdays, di) });
+        placements.push({ todo: u.todo, dur: u.dur, date: nthActiveDay(start, weekdays, di) });
         load += u.dur;
       }
     }
@@ -2379,7 +2406,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
     const newTasks = placements.map(p => ({
       id: genId(), date: p.date, title: taskTitleFor(p.todo),
-      hour: null, duration: todoDuration(p.todo), priority: "medium",
+      hour: null, duration: p.dur ?? todoDuration(p.todo), priority: "medium",
       actual: null, done: false, note: "", goalId: null,
       kind: "study", subjectId: p.todo.subjectId, subjectTodoId: p.todo.id,
     }));
@@ -3087,10 +3114,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px" }) }}>
                       ⚡ 自動分配
                     </button>
-                    <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
-                      style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
-                      📅 月に追加
-                    </button>
+                    {!autoMode && (
+                      <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
+                        style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
+                        📅 月に追加
+                      </button>
+                    )}
                     <button onClick={() => {
                       if (confirmBulkDelParent) {
                         deleteTodosBulk(selectedTodos);
@@ -3201,9 +3230,13 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                             }}>{U.label}</span>
                           );
                         })()}
-                        {inMonthly(t.id) && <span style={{ color: C.purple }}>📅</span>}
-                        {inWeekly(t.id) && <span style={{ color: C.blue }}>📆</span>}
-                        {inToday(t.id) && <span style={{ color: C.accent }}>🌅</span>}
+                        {autoMode
+                          ? (tasks.some(tk => tk.subjectTodoId === t.id) && <span style={{ color: C.accent, fontSize: 10, fontWeight: 700 }}>📅 予定済み</span>)
+                          : <>
+                              {inMonthly(t.id) && <span style={{ color: C.purple }}>📅</span>}
+                              {inWeekly(t.id) && <span style={{ color: C.blue }}>📆</span>}
+                              {inToday(t.id) && <span style={{ color: C.accent }}>🌅</span>}
+                            </>}
                       </div>
                       {(st === "reviewing" || st === "done") && (
                         <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 3, marginTop: 4 }}>
@@ -3235,20 +3268,22 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       }}>{fmtH(displayMinutes)}{hasChildren && <span style={{ opacity: 0.6 }}> 📝{doneChildren}/{children.length}</span>}</span>
                     ) : null}
                     <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
-                      <div style={{ display: "flex", gap: 3 }}>
-                        <button onClick={() => setMonthPickerTodo(t)} title="月を選んで追加"
-                          style={{
-                            ...btn(inAnyMonthly(t.id), C.purple, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
-                          }}>月{inAnyMonthly(t.id) ? `(${monthsOf(t.id).length})` : ""}</button>
-                        <button onClick={() => sendToWeekly(t)} title="今週に追加"
-                          style={{
-                            ...btn(inWeekly(t.id), C.blue, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
-                          }}>週</button>
-                        <button onClick={() => sendToToday(t)} title="今日に追加"
-                          style={{
-                            ...btn(inToday(t.id), C.accent, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
-                          }}>日</button>
-                      </div>
+                      {!autoMode && (
+                        <div style={{ display: "flex", gap: 3 }}>
+                          <button onClick={() => setMonthPickerTodo(t)} title="月を選んで追加"
+                            style={{
+                              ...btn(inAnyMonthly(t.id), C.purple, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
+                            }}>月{inAnyMonthly(t.id) ? `(${monthsOf(t.id).length})` : ""}</button>
+                          <button onClick={() => sendToWeekly(t)} title="今週に追加"
+                            style={{
+                              ...btn(inWeekly(t.id), C.blue, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
+                            }}>週</button>
+                          <button onClick={() => sendToToday(t)} title="今日に追加"
+                            style={{
+                              ...btn(inToday(t.id), C.accent, { fontSize: 9, padding: "2px 5px", lineHeight: 1 }),
+                            }}>日</button>
+                        </div>
+                      )}
                       <button onClick={() => {
                         if (confirmDelete === t.id) {
                           deleteTodo(t.id);
@@ -3950,7 +3985,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 /* ══════════════════════════════════════════════════════
    WEEK VIEW
 ══════════════════════════════════════════════════════ */
-function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans, setWeeklyPlans, subjects, subjectTodos, setView }) {
+function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans, setWeeklyPlans, subjects, subjectTodos, setView, settings }) {
+  const autoMode = (settings?.scheduleMode ?? "auto") === "auto";
   const dates = getWeekDates(selectedDate);
   const today = todayStr();
   const [expandedDate, setExpandedDate] = useState(today);
@@ -4054,8 +4090,77 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
         );
       })()}
 
-      {/* Weekly TODOs grouped by subject */}
-      {(() => {
+      {/* Auto mode: read-only summary of this week's scheduled tasks by subject */}
+      {autoMode && (() => {
+        const fmtHr = (h) => { const m = Math.round(h * 60); return m >= 60 ? `${Math.floor(m/60)}h${m%60 ? (m%60)+"m" : ""}` : `${m}m`; };
+        const weekTasks = tasks.filter(t => dates.includes(t.date) && t.kind !== "other");
+        if (weekTasks.length === 0) return (
+          <div style={{ ...card(), textAlign: "center", padding: 20, fontSize: 12, color: C.textMid }}>
+            今週の予定はまだありません<br/>
+            <span style={{ fontSize: 11, color: C.textDim }}>「📚 科目」画面の <span style={{ color: C.accent }}>⚡自動分配</span> で予定を組めます</span>
+          </div>
+        );
+        const totalH = weekTasks.reduce((s, t) => s + (t.duration || 0), 0);
+        const doneH = weekTasks.filter(t => t.done).reduce((s, t) => s + (t.duration || 0), 0);
+        const groups = subjects.map(s => {
+          const ts = weekTasks.filter(t => t.subjectId === s.id).sort((a, b) => a.date.localeCompare(b.date));
+          if (!ts.length) return null;
+          return { subject: s, tasks: ts, totalH: ts.reduce((x, t) => x + (t.duration || 0), 0), doneH: ts.filter(t => t.done).reduce((x, t) => x + (t.duration || 0), 0) };
+        }).filter(Boolean);
+        const orphan = weekTasks.filter(t => !t.subjectId || !subjects.some(s => s.id === t.subjectId));
+        if (orphan.length) groups.push({ subject: { id: "_orphan", name: "その他", color: C.textMid }, tasks: orphan.sort((a, b) => a.date.localeCompare(b.date)), totalH: orphan.reduce((x, t) => x + (t.duration || 0), 0), doneH: orphan.filter(t => t.done).reduce((x, t) => x + (t.duration || 0), 0) });
+        return (
+          <>
+            <div style={{ ...card(), padding: 14, background: C.accent + "10", borderColor: C.accent + "40" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.accent, marginBottom: 6 }}>📆 今週やること</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, color: C.text }}>{weekTasks.length}件</span>
+                <span style={{ fontSize: 13, color: C.text }}>計 <b>{fmtHr(totalH)}</b></span>
+                <span style={{ fontSize: 12, color: C.green }}>完了 {fmtHr(doneH)}</span>
+                <span style={{ fontSize: 12, color: C.textMid }}>残 {fmtHr(Math.max(0, totalH - doneH))}</span>
+              </div>
+              <div style={{ height: 5, background: C.border, borderRadius: 3, marginTop: 8, overflow: "hidden" }}>
+                <div style={{ width: totalH ? `${(doneH / totalH) * 100}%` : "0%", height: "100%", background: C.green }} />
+              </div>
+            </div>
+            {groups.map(g => {
+              const collapsed = collapsedSubjects.includes(g.subject.id);
+              return (
+                <div key={g.subject.id} style={{ ...card(), borderLeft: `4px solid ${g.subject.color}` }}>
+                  <div onClick={() => toggleCollapse(g.subject.id)}
+                    style={{ display: "flex", alignItems: "center", marginBottom: collapsed ? 0 : 8, cursor: "pointer", gap: 8 }}>
+                    <div style={{ fontSize: 11, color: C.textDim, width: 14 }}>{collapsed ? "▶" : "▼"}</div>
+                    <div style={{ flex: 1, fontSize: 14, fontWeight: 700, color: C.text }}>
+                      {g.subject.name}
+                      <span style={{ fontSize: 11, color: C.textMid, marginLeft: 6, fontWeight: 400 }}>({g.tasks.length}件)</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: C.textMid }}>残 <span style={{ color: g.subject.color, fontWeight: 700 }}>{fmtHr(Math.max(0, g.totalH - g.doneH))}</span></div>
+                  </div>
+                  {!collapsed && g.tasks.map(t => {
+                    const d = new Date(t.date + "T00:00:00");
+                    return (
+                      <div key={t.id} style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
+                        borderBottom: `1px solid ${C.border}`, opacity: t.done ? 0.5 : 1,
+                      }}>
+                        <span style={{ fontSize: 11, color: C.textMid, minWidth: 40 }}>{d.getMonth() + 1}/{d.getDate()}({DAYS_JA[d.getDay()]})</span>
+                        <span style={{ flex: 1, fontSize: 13, color: C.text, textDecoration: t.done ? "line-through" : "none" }}>
+                          {t.isReview && <span style={{ color: C.yellow, marginRight: 4 }}>🔁</span>}{t.title}
+                        </span>
+                        <span style={{ fontSize: 11, color: g.subject.color }}>{fmtHr(t.duration || 0)}</span>
+                        {t.done && <span style={{ color: C.green, fontSize: 12 }}>✓</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </>
+        );
+      })()}
+
+      {/* Weekly TODOs grouped by subject (manual mode) */}
+      {!autoMode && (() => {
         const thisWeekStart = dates[0];
         const thisWeekPlans = weeklyPlans.filter(p => p.weekStart === thisWeekStart);
         if (thisWeekPlans.length === 0) return (
@@ -4305,7 +4410,8 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
 /* ══════════════════════════════════════════════════════
    MONTH VIEW
 ══════════════════════════════════════════════════════ */
-function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeeklyPlans, subjects, subjectTodos, setView, selectedDate }) {
+function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeeklyPlans, subjects, subjectTodos, setView, selectedDate, tasks, settings }) {
+  const autoMode = (settings?.scheduleMode ?? "auto") === "auto";
   const [monthOffset, setMonthOffset] = useState(0); // 0 = this month, 1 = next, etc.
   const [collapsedSubjects, setCollapsedSubjects] = useState([]);
   const [weekPickerTodo, setWeekPickerTodo] = useState(null);
@@ -4357,8 +4463,83 @@ function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeekl
         <button onClick={() => setMonthOffset(12)} style={{ ...btn(monthOffset === 12, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>1年後</button>
       </div>
 
-      {/* Monthly TODOs grouped by subject */}
-      {(() => {
+      {/* Auto mode: read-only summary of this month's scheduled tasks */}
+      {autoMode && (() => {
+        const fmtHr = (h) => { const m = Math.round(h * 60); return m >= 60 ? `${Math.floor(m/60)}h${m%60 ? (m%60)+"m" : ""}` : `${m}m`; };
+        const monthTasks = tasks.filter(t => t.date.slice(0, 7) === thisMonth && t.kind !== "other");
+        if (monthTasks.length === 0) return (
+          <div style={{ ...card(), textAlign: "center", padding: 20, fontSize: 12, color: C.textMid }}>
+            {isViewingCurrentMonth ? "今月" : MONTHS_JA[month]}の予定はまだありません<br/>
+            <span style={{ fontSize: 11, color: C.textDim }}>「📚 科目」画面の <span style={{ color: C.accent }}>⚡自動分配</span> で予定を組めます</span>
+          </div>
+        );
+        const totalH = monthTasks.reduce((s, t) => s + (t.duration || 0), 0);
+        const doneH = monthTasks.filter(t => t.done).reduce((s, t) => s + (t.duration || 0), 0);
+        const groups = subjects.map(s => {
+          const ts = monthTasks.filter(t => t.subjectId === s.id).sort((a, b) => a.date.localeCompare(b.date));
+          if (!ts.length) return null;
+          return { subject: s, tasks: ts, totalH: ts.reduce((x, t) => x + (t.duration || 0), 0), doneH: ts.filter(t => t.done).reduce((x, t) => x + (t.duration || 0), 0) };
+        }).filter(Boolean);
+        const orphan = monthTasks.filter(t => !t.subjectId || !subjects.some(s => s.id === t.subjectId));
+        if (orphan.length) groups.push({ subject: { id: "_orphan", name: "その他", color: C.textMid }, tasks: orphan.sort((a, b) => a.date.localeCompare(b.date)), totalH: orphan.reduce((x, t) => x + (t.duration || 0), 0), doneH: orphan.filter(t => t.done).reduce((x, t) => x + (t.duration || 0), 0) });
+        return (
+          <>
+            <div style={{ ...card(), padding: 14, background: C.accent + "10", borderColor: C.accent + "40" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.accent, marginBottom: 6 }}>
+                📅 {isViewingCurrentMonth ? "今月" : MONTHS_JA[month]}やること
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, color: C.text }}>{monthTasks.length}件</span>
+                <span style={{ fontSize: 13, color: C.text }}>計 <b>{fmtHr(totalH)}</b></span>
+                <span style={{ fontSize: 12, color: C.green }}>完了 {fmtHr(doneH)}</span>
+                <span style={{ fontSize: 12, color: C.textMid }}>残 {fmtHr(Math.max(0, totalH - doneH))}</span>
+              </div>
+              <div style={{ height: 5, background: C.border, borderRadius: 3, marginTop: 8, overflow: "hidden" }}>
+                <div style={{ width: totalH ? `${(doneH / totalH) * 100}%` : "0%", height: "100%", background: C.green }} />
+              </div>
+            </div>
+            {groups.map(g => {
+              const collapsed = collapsedSubjects.includes(g.subject.id);
+              return (
+                <div key={g.subject.id} style={{ ...card(), borderLeft: `4px solid ${g.subject.color}` }}>
+                  <div onClick={() => toggleCollapse(g.subject.id)}
+                    style={{ display: "flex", alignItems: "center", marginBottom: collapsed ? 0 : 10, cursor: "pointer", gap: 8 }}>
+                    <div style={{ fontSize: 11, color: C.textDim, width: 14 }}>{collapsed ? "▶" : "▼"}</div>
+                    <div style={{ flex: 1, fontSize: 14, fontWeight: 700, color: C.text }}>
+                      {g.subject.name}
+                      <span style={{ fontSize: 11, color: C.textMid, marginLeft: 6, fontWeight: 400 }}>({g.tasks.length}件)</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: C.textMid }}>
+                      残 <span style={{ color: g.subject.color, fontWeight: 700 }}>{fmtHr(Math.max(0, g.totalH - g.doneH))}</span>
+                    </div>
+                  </div>
+                  {!collapsed && g.tasks.map(t => {
+                    const d = new Date(t.date + "T00:00:00");
+                    return (
+                      <div key={t.id} style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
+                        borderBottom: `1px solid ${C.border}`, opacity: t.done ? 0.5 : 1,
+                      }}>
+                        <span style={{ fontSize: 11, color: C.textMid, minWidth: 52, fontVariantNumeric: "tabular-nums" }}>
+                          {d.getMonth() + 1}/{d.getDate()}({DAYS_JA[d.getDay()]})
+                        </span>
+                        <span style={{ flex: 1, fontSize: 13, color: C.text, textDecoration: t.done ? "line-through" : "none" }}>
+                          {t.isReview && <span style={{ color: C.yellow, marginRight: 4 }}>🔁</span>}{t.title}
+                        </span>
+                        <span style={{ fontSize: 11, color: g.subject.color }}>{fmtHr(t.duration || 0)}</span>
+                        {t.done && <span style={{ color: C.green, fontSize: 12 }}>✓</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </>
+        );
+      })()}
+
+      {/* Monthly TODOs grouped by subject (manual mode) */}
+      {!autoMode && (() => {
         const thisMonthPlans = monthlyPlans.filter(p => p.month === thisMonth);
         if (thisMonthPlans.length === 0) return (
           <div style={{ ...card(), textAlign: "center", padding: 20, fontSize: 12, color: C.textMid }}>
@@ -4737,7 +4918,7 @@ function GoalsView({ goals, setGoals, subjects }) {
    SETTINGS MODAL
 ══════════════════════════════════════════════════════ */
 function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, setSyncEmail, syncStatus, lastSyncedAt, manualPull }) {
-  const [local, setLocal] = useState({ dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", ...settings });
+  const [local, setLocal] = useState({ dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true, ...settings });
   const [localEmail, setLocalEmail] = useState(syncEmail || "");
   const [confirmReset, setConfirmReset] = useState(false);
   const statusMap = {
@@ -4810,6 +4991,48 @@ function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, set
           <div style={{ fontSize: 10, color: C.textDim, marginTop: 4 }}>
             タスクは 0:00〜29:00 まで自由に登録できます（表示範囲外も保存されます）
           </div>
+        </div>
+
+        {/* Schedule mode */}
+        <div style={{ marginBottom: 14, padding: 12, background: C.surfaceUp, borderRadius: 8, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 12, color: C.textMid, marginBottom: 6, fontWeight: 700 }}>🗓 スケジュールの組み方</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+            <button onClick={() => setLocal(s => ({ ...s, scheduleMode: "auto" }))}
+              style={{ ...btn((local.scheduleMode ?? "auto") === "auto", C.accent, { flex: 1, fontSize: 12, padding: "8px" }) }}>
+              自動
+            </button>
+            <button onClick={() => setLocal(s => ({ ...s, scheduleMode: "manual" }))}
+              style={{ ...btn((local.scheduleMode ?? "auto") === "manual", C.accent, { flex: 1, fontSize: 12, padding: "8px" }) }}>
+              手動
+            </button>
+          </div>
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: (local.scheduleMode ?? "auto") === "auto" ? 10 : 0 }}>
+            {(local.scheduleMode ?? "auto") === "auto"
+              ? "科目の「⚡自動分配」で予定を組みます。月次・週次は「やること」を見るだけの画面になります。"
+              : "月→週→日へ自分で割り振ります（従来どおり）。"}
+          </div>
+          {(local.scheduleMode ?? "auto") === "auto" && (
+            <button onClick={() => setLocal(s => ({ ...s, chunkBoundary: !(s.chunkBoundary ?? true) }))}
+              style={{
+                display: "flex", alignItems: "center", gap: 8, width: "100%",
+                padding: "8px 10px", borderRadius: 6, cursor: "pointer",
+                background: C.surface, border: `1px solid ${C.border}`, fontFamily: font, textAlign: "left",
+              }}>
+              <span style={{
+                width: 18, height: 18, borderRadius: 4, flexShrink: 0,
+                border: `2px solid ${(local.chunkBoundary ?? true) ? C.accent : C.border}`,
+                background: (local.chunkBoundary ?? true) ? C.accent : "transparent",
+                color: "#fff", fontSize: 12, fontWeight: 700,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>{(local.chunkBoundary ?? true) ? "✓" : ""}</span>
+              <span style={{ flex: 1 }}>
+                <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>大問・例題セットで区切る</span>
+                <span style={{ display: "block", fontSize: 10, color: C.textDim, marginTop: 1 }}>
+                  大問と例題をまとめて同じ日に。OFFで細かく分けて配分。
+                </span>
+              </span>
+            </button>
+          )}
         </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -4914,7 +5137,7 @@ function App() {
   const [subjectTodos, setSubjectTodos] = usePersistedState("subjectTodos", SAMPLE_SUBJECT_TODOS);
   const [monthlyPlans, setMonthlyPlans] = usePersistedState("monthlyPlans", []);
   const [weeklyPlans, setWeeklyPlans] = usePersistedState("weeklyPlans", []);
-  const [settings, setSettings] = usePersistedState("settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答" });
+  const [settings, setSettings] = usePersistedState("settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true });
   const [syncEmail, setSyncEmail] = usePersistedState("syncEmail", "");
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error
   const [lastSyncedAt, setLastSyncedAt] = useState(0);
@@ -5051,9 +5274,9 @@ function App() {
       <div style={{ flex: 1, overflowY: "auto" }}>
         {view === "day"    && <DayView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} goals={goals} subjects={subjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} settings={settings} />}
         {view === "review" && <ReviewView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} setView={setView} subjects={subjects} subjectTodos={subjectTodos} settings={settings} goals={goals} />}
-        {view === "subjects" && <SubjectsView subjects={subjects} setSubjects={setSubjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} goals={goals} subjectCategories={subjectCategories} setSubjectCategories={setSubjectCategories} />}
-        {view === "week"   && <WeekView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} />}
-        {view === "month"  && <MonthView goals={goals} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} selectedDate={selectedDate} />}
+        {view === "subjects" && <SubjectsView subjects={subjects} setSubjects={setSubjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} goals={goals} subjectCategories={subjectCategories} setSubjectCategories={setSubjectCategories} settings={settings} />}
+        {view === "week"   && <WeekView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} settings={settings} />}
+        {view === "month"  && <MonthView goals={goals} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} selectedDate={selectedDate} tasks={tasks} settings={settings} />}
         {view === "goals"  && <GoalsView goals={goals} setGoals={setGoals} subjects={subjects} />}
       </div>
 
