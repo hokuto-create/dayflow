@@ -164,12 +164,7 @@ const SAMPLE_SUBJECTS = [
   { id: "s_theory", name: "財理", color: "#3a9d6e" },
   { id: "s_mgmt", name: "管理会計", color: "#d4a528" },
   { id: "s_law", name: "企業法", color: "#4a8ed1" },
-  // 趣味勉強 > 高校数学 > 赤チャート（教材＝数学Ⅰ/A/Ⅱ/B/Ⅲ）
-  { id: "rc_math1", name: "赤チャート数学Ⅰ", color: "#d14545", category: "趣味勉強", group: "高校数学" },
-  { id: "rc_mathA", name: "赤チャート数学A", color: "#3a9d6e", category: "趣味勉強", group: "高校数学" },
-  { id: "rc_math2", name: "赤チャート数学Ⅱ", color: "#4a8ed1", category: "趣味勉強", group: "高校数学" },
-  { id: "rc_mathB", name: "赤チャート数学B", color: "#8b6fcc", category: "趣味勉強", group: "高校数学" },
-  { id: "rc_math3", name: "赤チャート数学Ⅲ", color: "#d4a528", category: "趣味勉強", group: "高校数学" },
+  // 趣味勉強 > 高校数学 > 赤チャートの教材は RED_CHART_SUBJECTS で定義し、後段でpushする
 ];
 
 // helper: build a todo (sequential createdAt counter)
@@ -496,6 +491,16 @@ const SAMPLE_SUBJECT_TODOS = [
    ・演習問題・総合演習は全章を終えた後に取り組む独立TODO。
    chapters[].examples は例題のサブタイトル（例題名）を順に並べた配列。
    写真から読み取り次第、各章の examples を追記していく。 */
+
+// 教材（＝subject）。idは buildRedChartTodos の book.id と一致させる。
+const RED_CHART_SUBJECTS = [
+  { id: "rc_math1", name: "赤チャート数学Ⅰ", color: "#d14545", category: "趣味勉強", group: "高校数学" },
+  { id: "rc_mathA", name: "赤チャート数学A", color: "#3a9d6e", category: "趣味勉強", group: "高校数学" },
+  { id: "rc_math2", name: "赤チャート数学Ⅱ", color: "#4a8ed1", category: "趣味勉強", group: "高校数学" },
+  { id: "rc_mathB", name: "赤チャート数学B", color: "#8b6fcc", category: "趣味勉強", group: "高校数学" },
+  { id: "rc_math3", name: "赤チャート数学Ⅲ", color: "#d4a528", category: "趣味勉強", group: "高校数学" },
+];
+
 const RED_CHART_BOOKS = [
   {
     id: "rc_math1", exercises: 57,
@@ -755,7 +760,41 @@ function buildRedChartTodos(books, sogo) {
   });
   return out;
 }
-SAMPLE_SUBJECT_TODOS.push(...buildRedChartTodos(RED_CHART_BOOKS, RED_CHART_SOGO));
+
+// 赤チャートのTODO（章＝親、例題＝子）。シード兼マイグレーション用に名前付きで保持。
+const RED_CHART_TODOS = buildRedChartTodos(RED_CHART_BOOKS, RED_CHART_SOGO);
+
+// 新規インストール用シードに反映
+SAMPLE_SUBJECTS.push(...RED_CHART_SUBJECTS);
+SAMPLE_SUBJECT_TODOS.push(...RED_CHART_TODOS);
+
+// 既存データ（localStorage / クラウド同期済み）に赤チャートの不足分だけを追記するマイグレーション。
+// ・既存の進捗(status/done)や他データは一切変更しない（純粋に追加のみ）。
+// ・教材は id、TODOは「subjectId|text」をキーに重複判定するため、
+//   後から例題を追記しても次回起動時に不足分が自動で足される。
+function mergeRedChart({ subjects, subjectTodos, subjectCategories }) {
+  const subjOut = [...subjects];
+  RED_CHART_SUBJECTS.forEach(s => {
+    if (!subjOut.some(x => x.id === s.id)) subjOut.push(s);
+  });
+  const existingKeys = new Set(
+    subjectTodos
+      .filter(t => t.subjectId && t.subjectId.startsWith("rc_"))
+      .map(t => `${t.subjectId}|${t.text}`)
+  );
+  const toAdd = RED_CHART_TODOS.filter(t => !existingKeys.has(`${t.subjectId}|${t.text}`));
+  const todoOut = toAdd.length ? [...subjectTodos, ...toAdd] : subjectTodos;
+  const catOut = (subjectCategories || []).includes("趣味勉強")
+    ? subjectCategories
+    : [...(subjectCategories || []), "趣味勉強"];
+  return {
+    subjects: subjOut,
+    subjectTodos: todoOut,
+    subjectCategories: catOut,
+    added: toAdd.length,
+    addedSubjects: RED_CHART_SUBJECTS.filter(s => !subjects.some(x => x.id === s.id)).length,
+  };
+}
 
 /* ── SHARED STYLES ── */
 const card = (extra = {}) => ({
@@ -5433,6 +5472,27 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const initialPulledRef = useRef(false);
   const lastPushedDataRef = useRef("");
+  const rcMergedRef = useRef(false);
+
+  // 赤チャート（趣味勉強>高校数学）の不足分を既存データへ追記。
+  // メール未設定なら即時、設定済みなら初回クラウド取得の完了(synced)後に一度だけ実行する。
+  useEffect(() => {
+    if (rcMergedRef.current) return;
+    if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
+    rcMergedRef.current = true;
+    let added = false;
+    setSubjects(prev => {
+      const o = [...prev];
+      RED_CHART_SUBJECTS.forEach(s => { if (!o.some(x => x.id === s.id)) { o.push(s); added = true; } });
+      return added ? o : prev;
+    });
+    setSubjectTodos(prev => {
+      const keys = new Set(prev.filter(t => t.subjectId && t.subjectId.startsWith("rc_")).map(t => `${t.subjectId}|${t.text}`));
+      const toAdd = RED_CHART_TODOS.filter(t => !keys.has(`${t.subjectId}|${t.text}`));
+      return toAdd.length ? [...prev, ...toAdd] : prev;
+    });
+    setSubjectCategories(prev => (prev || []).includes("趣味勉強") ? prev : [...(prev || []), "趣味勉強"]);
+  }, [syncEmail, syncStatus]);
 
   // Pull from cloud on initial load if email is set
   useEffect(() => {
