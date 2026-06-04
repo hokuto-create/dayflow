@@ -2847,11 +2847,68 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
             )}
           </div>
 
-          {/* 「＋追加」を押すと追加方法（1件ずつ/まとめて/連番）が開く */}
-          <button onClick={() => setAddOpen(o => !o)}
-            style={{ ...btn(addOpen, activeSubjectData.color, { width: "100%", padding: "9px", fontSize: 13, fontWeight: 700 }) }}>
-            {addOpen ? "× 閉じる" : "＋ 追加"}
-          </button>
+          {/* Compact action toolbar: ＋追加 / 複数選択 / ⚡自動分配 */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {!selectMode && (
+              <>
+                <button onClick={() => setAddOpen(o => !o)}
+                  style={{ ...btn(addOpen, activeSubjectData.color, { fontSize: 11, padding: "5px 10px", whiteSpace: "nowrap" }) }}>
+                  {addOpen ? "× 閉じる" : "＋ 追加"}
+                </button>
+                <button onClick={() => { setSelectMode(s => !s); setSelectedTodos([]); }}
+                  style={{ ...btn(false, C.purple, { fontSize: 11, padding: "5px 10px", whiteSpace: "nowrap" }) }}>
+                  ☑ 複数選択
+                </button>
+                <div style={{ flex: 1 }} />
+                <button onClick={() => openAutoDist(parentTodos.map(t => t.id))}
+                  style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px", whiteSpace: "nowrap" }) }}>
+                  ⚡ 自動分配
+                </button>
+              </>
+            )}
+            {selectMode && (
+              <>
+                <button onClick={() => { setSelectMode(s => !s); setSelectedTodos([]); }}
+                  style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
+                  ✕ 選択終了
+                </button>
+                <button onClick={() => setSelectedTodos(todos.map(t => t.id))}
+                  style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "5px 10px" }) }}>
+                  全選択
+                </button>
+                <div style={{ flex: 1, fontSize: 11, color: C.textMid, textAlign: "right" }}>
+                  {selectedTodos.length}件選択中
+                </div>
+                {selectedTodos.length > 0 && (
+                  <>
+                    <button onClick={() => openAutoDist(selectedTodos)}
+                      style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px" }) }}>
+                      ⚡ 自動分配
+                    </button>
+                    {!autoMode && (
+                      <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
+                        style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
+                        📅 月に追加
+                      </button>
+                    )}
+                    <button onClick={() => {
+                      if (confirmBulkDelParent) {
+                        deleteTodosBulk(selectedTodos);
+                        setSelectedTodos([]);
+                        setConfirmBulkDelParent(false);
+                        setSelectMode(false);
+                      } else {
+                        setConfirmBulkDelParent(true);
+                        setTimeout(() => setConfirmBulkDelParent(false), 3000);
+                      }
+                    }} style={{ ...btn(confirmBulkDelParent, C.red, { fontSize: 11, padding: "5px 10px" }) }}>
+                      {confirmBulkDelParent ? `削除？(${selectedTodos.length})` : "🗑 削除"}
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+          </div>
 
           {addOpen && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -3095,58 +3152,6 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 {l} {n}
               </button>
             ))}
-          </div>
-
-          {/* Selection mode toolbar */}
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <button onClick={() => { setSelectMode(s => !s); setSelectedTodos([]); }}
-              style={{ ...btn(selectMode, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
-              {selectMode ? "✕ 選択終了" : "☑ 複数選択"}
-            </button>
-            {!selectMode && (
-              <button onClick={() => openAutoDist(parentTodos.map(t => t.id))}
-                style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px", marginLeft: "auto", whiteSpace: "nowrap" }) }}>
-                ⚡ 自動分配
-              </button>
-            )}
-            {selectMode && (
-              <>
-                <button onClick={() => setSelectedTodos(todos.map(t => t.id))}
-                  style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "5px 10px" }) }}>
-                  全選択
-                </button>
-                <div style={{ flex: 1, fontSize: 11, color: C.textMid, textAlign: "right" }}>
-                  {selectedTodos.length}件選択中
-                </div>
-                {selectedTodos.length > 0 && (
-                  <>
-                    <button onClick={() => openAutoDist(selectedTodos)}
-                      style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px" }) }}>
-                      ⚡ 自動分配
-                    </button>
-                    {!autoMode && (
-                      <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
-                        style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
-                        📅 月に追加
-                      </button>
-                    )}
-                    <button onClick={() => {
-                      if (confirmBulkDelParent) {
-                        deleteTodosBulk(selectedTodos);
-                        setSelectedTodos([]);
-                        setConfirmBulkDelParent(false);
-                        setSelectMode(false);
-                      } else {
-                        setConfirmBulkDelParent(true);
-                        setTimeout(() => setConfirmBulkDelParent(false), 3000);
-                      }
-                    }} style={{ ...btn(confirmBulkDelParent, C.red, { fontSize: 11, padding: "5px 10px" }) }}>
-                      {confirmBulkDelParent ? `削除？(${selectedTodos.length})` : "🗑 削除"}
-                    </button>
-                  </>
-                )}
-              </>
-            )}
           </div>
 
           {/* Todo list */}
