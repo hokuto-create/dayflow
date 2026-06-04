@@ -107,8 +107,8 @@ function addDays(dateStr, n) {
   return d.toISOString().split("T")[0];
 }
 
-/* ── AUTO-SCHEDULE HELPERS ──
-   Shared by the day-level and week-level "自動で組む" features. */
+/* ── AUTO-DISTRIBUTE HELPERS ──
+   Used by the subject auto-distribution (自動分配) feature. */
 
 // Build a task title from a subject TODO. For non-CPA (material) subjects we
 // prepend the subject/textbook name, matching SubjectsView.taskTitleFor.
@@ -120,45 +120,30 @@ function buildTaskTitle(todo, subjects) {
   return todo.text;
 }
 
-// Total minutes of a TODO including its example (例題) children.
-function todoTotalMinutes(todo, allTodos) {
-  const childMin = allTodos
-    .filter(c => c.parentId === todo.id)
-    .reduce((s, c) => s + (c.minutes || 0), 0);
-  return (todo.minutes || 0) + childMin;
-}
-
-// Earliest free start hour in [startH, endH) for a task of `dur` hours, given
-// already-placed tasks (each {hour, duration}). Uses the same 15-min slot rule
-// as the manual time picker: each 15-min slot holds at most 15 min total.
-function findFreeSlot(placed, dur, startH, endH) {
-  const SLOT = 0.25;
-  const overlapInSlot = (taskStart, taskEnd, slotStart) => {
-    const slotEnd = slotStart + SLOT;
-    const a = Math.max(taskStart, slotStart);
-    const b = Math.min(taskEnd, slotEnd);
-    return Math.max(0, b - a);
-  };
-  for (let h = startH; h < endH; h += SLOT) {
-    const taskEnd = h + dur;
-    let ok = true;
-    for (let s = h; s < taskEnd - 0.0001; s += SLOT) {
-      const existing = placed.reduce((sum, x) => sum + overlapInSlot(x.hour, x.hour + x.duration, s), 0);
-      if (existing + overlapInSlot(h, taskEnd, s) > SLOT + 0.0001) { ok = false; break; }
-    }
-    if (ok) return h;
+// Active study days in [startStr, endStr] whose weekday is in `weekdays` (a Set
+// of 0=Sun..6=Sat). Used by deadline-mode auto-distribution.
+function activeDaysBetween(startStr, endStr, weekdays) {
+  const out = [];
+  let d = startStr, guard = 0;
+  while (d <= endStr && guard++ < 3660) {
+    if (weekdays.has(new Date(d + "T00:00:00").getDay())) out.push(d);
+    d = addDays(d, 1);
   }
-  return null;
+  return out;
 }
 
-// Ordering for auto-placement: review tasks first (復習を最優先), then by
-// priority (high→low), then longer tasks first so big blocks fit early.
-const AUTO_PRIORITY_RANK = { high: 0, medium: 1, mid: 1, low: 2 };
-function autoScheduleOrder(a, b) {
-  if (!!a.isReview !== !!b.isReview) return a.isReview ? -1 : 1;
-  const pr = (AUTO_PRIORITY_RANK[a.priority] ?? 1) - (AUTO_PRIORITY_RANK[b.priority] ?? 1);
-  if (pr) return pr;
-  return (b.duration || 0) - (a.duration || 0);
+// The k-th (0-indexed) active day on/after startStr matching `weekdays`.
+// Used by hours-per-day mode where the end date is open-ended.
+function nthActiveDay(startStr, weekdays, k) {
+  let d = startStr, count = 0, guard = 0;
+  while (guard++ < 3660) {
+    if (weekdays.has(new Date(d + "T00:00:00").getDay())) {
+      if (count === k) return d;
+      count++;
+    }
+    d = addDays(d, 1);
+  }
+  return d;
 }
 
 /* ── INITIAL DATA ── */
@@ -701,23 +686,6 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const endH = settings?.dayEndHour ?? 26;
   const hours = Array.from({ length: endH - startH }, (_, i) => i + startH);
 
-  // Auto-assign a start time to every unscheduled task of this day. Reviews go
-  // first, then high→low priority, filling the earliest free slots. Tasks that
-  // don't fit are left unscheduled.
-  const autoSchedule = () => {
-    const placed = dayTasks.map(t => ({ hour: t.hour, duration: t.duration }));
-    const ordered = [...unscheduledTasks].sort(autoScheduleOrder);
-    const assigned = {};
-    for (const t of ordered) {
-      const h = findFreeSlot(placed, t.duration, startH, endH);
-      if (h == null) continue;
-      assigned[t.id] = h;
-      placed.push({ hour: h, duration: t.duration });
-    }
-    if (Object.keys(assigned).length === 0) return;
-    setTasks(ts => ts.map(t => assigned[t.id] != null ? { ...t, hour: assigned[t.id] } : t));
-  };
-
   return (
     <div style={{ padding: 16, maxWidth: 600, margin: "0 auto" }}>
       {/* Date selector */}
@@ -808,14 +776,8 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       {/* Unscheduled tasks */}
       {unscheduledTasks.length > 0 && (
         <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff8ec", borderColor: C.yellow + "60" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <div style={{ flex: 1, fontSize: 11, fontWeight: 700, color: C.yellow }}>
-              ⏱ 未スケジュール（{unscheduledTasks.length}件）— タップで時間を割り振る
-            </div>
-            <button onClick={autoSchedule}
-              style={{ ...btn(true, C.accent, { fontSize: 11, padding: "5px 10px", whiteSpace: "nowrap" }) }}>
-              ⚡ 自動割り振り
-            </button>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.yellow, marginBottom: 8 }}>
+            ⏱ 未スケジュール（{unscheduledTasks.length}件）— タップで時間を割り振る
           </div>
           {unscheduledTasks.map(t => {
             const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
@@ -2095,6 +2057,13 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [tplOpen, setTplOpen] = useState(false);
   const [tpl, setTpl] = useState({ prefix: "TX", chapters: [{ chapter: 1, sections: 10 }], suffix: "", minutes: 60, numberingMode: "perChapter" });
   const [chapterTitlesText, setChapterTitlesText] = useState("");
+  // Auto-distribute (自動分配): spread a subject's remaining units across days
+  const [autoDistIds, setAutoDistIds] = useState(null); // target todo ids, or null when modal closed
+  const [autoDistMode, setAutoDistMode] = useState("deadline"); // 'deadline' | 'hours'
+  const [autoDistDeadline, setAutoDistDeadline] = useState(addDays(todayStr(), 30));
+  const [autoDistHours, setAutoDistHours] = useState("2");
+  const [autoDistStart, setAutoDistStart] = useState(todayStr());
+  const [autoDistWeekdays, setAutoDistWeekdays] = useState([0, 1, 2, 3, 4, 5, 6]);
 
   const COLORS = [C.blue, C.green, C.accent, C.purple, C.red, C.yellow];
 
@@ -2350,6 +2319,99 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
     }]);
     if (!inWeekly(todo.id)) sendToWeekly(todo);
+  };
+
+  /* ── 自動分配 (auto-distribute over days) ── */
+  // A unit already has an open (not-done) task somewhere → skip to avoid dupes.
+  const isScheduledActive = (todoId) => tasks.some(t => t.subjectTodoId === todoId && !t.done);
+
+  // Open the modal for the given todo ids (keeps only schedulable top-level units).
+  const openAutoDist = (ids) => {
+    const list = ids.filter(id => {
+      const t = subjectTodos.find(x => x.id === id);
+      return t && isParent(t) && parentStatusOf(t) !== "done" && !isScheduledActive(t.id);
+    });
+    if (list.length === 0) return;
+    setAutoDistIds(list);
+  };
+
+  // Target units (sorted in textbook order) with their durations in hours.
+  const autoDistUnits = () => (autoDistIds || [])
+    .map(id => subjectTodos.find(t => t.id === id))
+    .filter(Boolean)
+    .filter(t => parentStatusOf(t) !== "done")
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map(t => ({ todo: t, dur: todoDuration(t) }));
+
+  // Greedy placement of units onto days. Returns [{ todo, date }].
+  const computeAutoPlacements = (units) => {
+    const placements = [];
+    const weekdays = new Set(autoDistWeekdays);
+    if (weekdays.size === 0 || units.length === 0) return placements;
+    const start = autoDistStart || todayStr();
+    const total = units.reduce((s, u) => s + u.dur, 0);
+    if (autoDistMode === "deadline") {
+      const days = activeDaysBetween(start, autoDistDeadline, weekdays);
+      if (days.length === 0) return placements;
+      const target = total / days.length;
+      let di = 0, load = 0;
+      for (const u of units) {
+        if (load > 0 && load + u.dur > target + 1e-9 && di < days.length - 1) { di++; load = 0; }
+        placements.push({ todo: u.todo, date: days[di] });
+        load += u.dur;
+      }
+    } else {
+      const target = Math.max(0.25, parseFloat(autoDistHours) || 0);
+      let di = 0, load = 0;
+      for (const u of units) {
+        if (load > 0 && load + u.dur > target + 1e-9) { di++; load = 0; }
+        placements.push({ todo: u.todo, date: nthActiveDay(start, weekdays, di) });
+        load += u.dur;
+      }
+    }
+    return placements;
+  };
+
+  const runAutoDistribute = () => {
+    const units = autoDistUnits();
+    const placements = computeAutoPlacements(units);
+    if (placements.length === 0) return;
+
+    const newTasks = placements.map(p => ({
+      id: genId(), date: p.date, title: taskTitleFor(p.todo),
+      hour: null, duration: todoDuration(p.todo), priority: "medium",
+      actual: null, done: false, note: "", goalId: null,
+      kind: "study", subjectId: p.todo.subjectId, subjectTodoId: p.todo.id,
+    }));
+    setTasks(ts => [...ts, ...newTasks]);
+
+    // Keep the month/week planning views in sync with the new schedule.
+    const monthAdds = [], weekAdds = [];
+    const seenM = new Set(), seenW = new Set();
+    placements.forEach(p => {
+      const month = p.date.slice(0, 7);
+      if (!seenM.has(month + "|" + p.todo.id)) {
+        seenM.add(month + "|" + p.todo.id);
+        monthAdds.push({ id: genId(), month, todoId: p.todo.id, subjectId: p.todo.subjectId, createdAt: Date.now() });
+      }
+      const ws = getWeekDates(p.date)[0];
+      if (!seenW.has(ws + "|" + p.todo.id)) {
+        seenW.add(ws + "|" + p.todo.id);
+        weekAdds.push({ id: genId(), weekStart: ws, todoId: p.todo.id, subjectId: p.todo.subjectId, createdAt: Date.now() });
+      }
+    });
+    setMonthlyPlans(ps => {
+      const ex = new Set(ps.map(p => p.month + "|" + p.todoId));
+      return [...ps, ...monthAdds.filter(a => !ex.has(a.month + "|" + a.todoId))];
+    });
+    setWeeklyPlans(ps => {
+      const ex = new Set(ps.map(p => p.weekStart + "|" + p.todoId));
+      return [...ps, ...weekAdds.filter(a => !ex.has(a.weekStart + "|" + a.todoId))];
+    });
+
+    setAutoDistIds(null);
+    setSelectMode(false);
+    setSelectedTodos([]);
   };
 
   // Collect an id and all its descendants (recursive) from a list
@@ -3004,6 +3066,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               style={{ ...btn(selectMode, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
               {selectMode ? "✕ 選択終了" : "☑ 複数選択"}
             </button>
+            {!selectMode && (
+              <button onClick={() => openAutoDist(parentTodos.map(t => t.id))}
+                style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px", marginLeft: "auto", whiteSpace: "nowrap" }) }}>
+                ⚡ 自動分配
+              </button>
+            )}
             {selectMode && (
               <>
                 <button onClick={() => setSelectedTodos(todos.map(t => t.id))}
@@ -3015,6 +3083,10 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 </div>
                 {selectedTodos.length > 0 && (
                   <>
+                    <button onClick={() => openAutoDist(selectedTodos)}
+                      style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px" }) }}>
+                      ⚡ 自動分配
+                    </button>
                     <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
                       style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
                       📅 月に追加
@@ -3761,6 +3833,116 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
           </div>
         );
       })()}
+
+      {/* Auto-distribute modal */}
+      {autoDistIds && (() => {
+        const units = autoDistUnits();
+        const placements = computeAutoPlacements(units);
+        const totalH = units.reduce((s, u) => s + u.dur, 0);
+        const dayCount = new Set(placements.map(p => p.date)).size;
+        const lastDate = placements.length ? placements[placements.length - 1].date : null;
+        const weekdaysSet = new Set(autoDistWeekdays);
+        const fmtMD = (d) => { const o = new Date(d + "T00:00:00"); return `${o.getMonth() + 1}/${o.getDate()}(${DAYS_JA[o.getDay()]})`; };
+        const subjColor = activeSubjectData?.color || C.accent;
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }} onClick={() => setAutoDistIds(null)}>
+            <div style={{ ...card({ maxWidth: 420, width: "100%", maxHeight: "88vh", display: "flex", flexDirection: "column" }) }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontFamily: serif, fontSize: 17, color: C.text, marginBottom: 2 }}>⚡ 自動分配</div>
+              <div style={{ fontSize: 12, color: subjColor, marginBottom: 12 }}>
+                {activeSubjectData?.name} ・ {units.length}単位 / 計{fmtH(Math.round(totalH * 60))}
+              </div>
+
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
+                {/* Mode toggle */}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => setAutoDistMode("deadline")}
+                    style={{ ...btn(autoDistMode === "deadline", subjColor, { flex: 1, fontSize: 12, padding: "8px" }) }}>
+                    📅 期限までに
+                  </button>
+                  <button onClick={() => setAutoDistMode("hours")}
+                    style={{ ...btn(autoDistMode === "hours", subjColor, { flex: 1, fontSize: 12, padding: "8px" }) }}>
+                    ⏱ 1日あたり
+                  </button>
+                </div>
+
+                {/* Start date */}
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textMid }}>
+                  <span style={{ width: 64 }}>開始日</span>
+                  <input type="date" value={autoDistStart} min={todayStr()}
+                    onChange={e => e.target.value && setAutoDistStart(e.target.value)}
+                    style={{ ...input({ flex: 1, fontSize: 13, padding: "7px 10px" }) }} />
+                </label>
+
+                {autoDistMode === "deadline" ? (
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textMid }}>
+                    <span style={{ width: 64 }}>期限</span>
+                    <input type="date" value={autoDistDeadline} min={autoDistStart}
+                      onChange={e => e.target.value && setAutoDistDeadline(e.target.value)}
+                      style={{ ...input({ flex: 1, fontSize: 13, padding: "7px 10px" }) }} />
+                  </label>
+                ) : (
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textMid }}>
+                    <span style={{ width: 64 }}>1日あたり</span>
+                    <input type="number" min="0.25" step="0.25" value={autoDistHours}
+                      onChange={e => setAutoDistHours(e.target.value)}
+                      style={{ ...input({ width: 90, fontSize: 13, padding: "7px 10px" }) }} />
+                    <span style={{ fontSize: 12 }}>時間</span>
+                  </label>
+                )}
+
+                {/* Weekday selector */}
+                <div>
+                  <div style={{ fontSize: 12, color: C.textMid, marginBottom: 6 }}>使う曜日</div>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {DAYS_JA.map((dn, i) => {
+                      const on = weekdaysSet.has(i);
+                      return (
+                        <button key={i} onClick={() => setAutoDistWeekdays(ws =>
+                          ws.includes(i) ? ws.filter(x => x !== i) : [...ws, i]
+                        )} style={{
+                          flex: 1, padding: "7px 0", borderRadius: 6,
+                          background: on ? subjColor : C.surfaceUp,
+                          border: `1px solid ${on ? subjColor : C.border}`,
+                          color: on ? "#fff" : (i === 0 ? C.red : i === 6 ? C.blue : C.textMid),
+                          fontFamily: font, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                        }}>{dn}</button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Preview */}
+                <div style={{ ...card({ background: C.surfaceUp, padding: 12, marginBottom: 0 }) }}>
+                  {placements.length === 0 ? (
+                    <div style={{ fontSize: 12, color: C.red }}>
+                      条件に合う日がありません（曜日・期限・開始日を確認してください）
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
+                      <div><b>{units.length}</b> 単位を <b>{dayCount}</b> 日に分配</div>
+                      {autoDistMode === "deadline"
+                        ? <div>1日平均 約 <b>{(totalH / Math.max(1, dayCount)).toFixed(1)}h</b></div>
+                        : <div>終了予定 <b>{lastDate ? fmtMD(lastDate) : "–"}</b></div>}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                <button onClick={() => setAutoDistIds(null)}
+                  style={{ ...btn(false, C.textMid, { flex: 1, padding: "10px" }) }}>キャンセル</button>
+                <button onClick={runAutoDistribute} disabled={placements.length === 0}
+                  style={{ ...btn(true, subjColor, { flex: 1, padding: "10px", opacity: placements.length === 0 ? 0.5 : 1 }) }}>
+                  分配する
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -3768,7 +3950,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 /* ══════════════════════════════════════════════════════
    WEEK VIEW
 ══════════════════════════════════════════════════════ */
-function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans, setWeeklyPlans, subjects, subjectTodos, setView, settings }) {
+function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans, setWeeklyPlans, subjects, subjectTodos, setView }) {
   const dates = getWeekDates(selectedDate);
   const today = todayStr();
   const [expandedDate, setExpandedDate] = useState(today);
@@ -3782,62 +3964,6 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
   const getTasksForDate = (d) => tasks.filter(t => t.date === d);
   const getDoneCount = (d) => getTasksForDate(d).filter(t => t.done).length;
   const getTotalCount = (d) => getTasksForDate(d).length;
-
-  const startH = settings?.dayStartHour ?? 5;
-  const endH = settings?.dayEndHour ?? 26;
-
-  // Auto-distribute this week's planned TODOs (週次プラン) across the week's days
-  // and assign each a time slot. Only TODOs not yet placed on any day this week
-  // are added, so it's safe to run repeatedly. Days are balanced by total
-  // duration; only today and future days are used (unless the whole week is past).
-  const autoScheduleWeek = () => {
-    const weekStart = dates[0];
-    let days = dates.filter(d => d >= today);
-    if (days.length === 0) days = [...dates];
-
-    const candidates = [];
-    weeklyPlans.filter(p => p.weekStart === weekStart).forEach(p => {
-      const todo = subjectTodos.find(t => t.id === p.todoId);
-      if (!todo) return;
-      const st = todo.status || (todo.done ? "done" : "unwatched");
-      if (st === "done") return; // already finished
-      if (tasks.some(t => dates.includes(t.date) && t.subjectTodoId === todo.id)) return; // already placed
-      const totalMin = todoTotalMinutes(todo, subjectTodos);
-      candidates.push({ todo, dur: totalMin ? Math.max(1/60, totalMin / 60) : 1, weight: totalMin || 60 });
-    });
-    if (candidates.length === 0) return;
-
-    // Place larger items first for better balance.
-    candidates.sort((a, b) => b.weight - a.weight);
-    const load = {};
-    days.forEach(d => { load[d] = getTasksForDate(d).reduce((s, t) => s + (t.duration || 0), 0); });
-
-    const newTasks = candidates.map(c => {
-      let best = days[0];
-      for (const d of days) if (load[d] < load[best]) best = d;
-      load[best] += c.dur;
-      return {
-        id: genId(), date: best, title: buildTaskTitle(c.todo, subjects),
-        hour: null, duration: c.dur, priority: "medium",
-        actual: null, done: false, note: "", goalId: null,
-        kind: "study", subjectId: c.todo.subjectId, subjectTodoId: c.todo.id,
-      };
-    });
-
-    // Assign time slots within each day, around existing scheduled tasks.
-    const byDate = {};
-    newTasks.forEach(t => { (byDate[t.date] = byDate[t.date] || []).push(t); });
-    Object.entries(byDate).forEach(([d, list]) => {
-      const placed = tasks.filter(t => t.date === d && t.hour != null)
-        .map(t => ({ hour: t.hour, duration: t.duration }));
-      list.sort(autoScheduleOrder).forEach(t => {
-        const h = findFreeSlot(placed, t.duration, startH, endH);
-        if (h != null) { t.hour = h; placed.push({ hour: h, duration: t.duration }); }
-      });
-    });
-
-    setTasks(ts => [...ts, ...newTasks]);
-  };
 
   return (
     <div style={{ padding: 16, maxWidth: 600, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -3957,12 +4083,6 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                 style={{ ...btn(selectMode, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
                 {selectMode ? "✕ 選択終了" : "☑ 複数選択"}
               </button>
-              {!selectMode && (
-                <button onClick={autoScheduleWeek}
-                  style={{ ...btn(true, C.accent, { fontSize: 11, padding: "5px 10px", marginLeft: "auto", whiteSpace: "nowrap" }) }}>
-                  ⚡ 今週を自動で組む
-                </button>
-              )}
               {selectMode && (
                 <>
                   <button onClick={() => setSelectedTodos(allTodoIds)}
@@ -4932,7 +5052,7 @@ function App() {
         {view === "day"    && <DayView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} goals={goals} subjects={subjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} settings={settings} />}
         {view === "review" && <ReviewView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} setView={setView} subjects={subjects} subjectTodos={subjectTodos} settings={settings} goals={goals} />}
         {view === "subjects" && <SubjectsView subjects={subjects} setSubjects={setSubjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} goals={goals} subjectCategories={subjectCategories} setSubjectCategories={setSubjectCategories} />}
-        {view === "week"   && <WeekView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} settings={settings} />}
+        {view === "week"   && <WeekView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} />}
         {view === "month"  && <MonthView goals={goals} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} selectedDate={selectedDate} />}
         {view === "goals"  && <GoalsView goals={goals} setGoals={setGoals} subjects={subjects} />}
       </div>
