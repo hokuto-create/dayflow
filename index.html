@@ -909,12 +909,31 @@ const RED_CHART_BOOKS = [
 ];
 
 // 総合演習（第1部＝問題＋類題、第2部＝主題＋試練）。
-// ⅠAはⅠ・Aの合本、ⅡBはⅡ・Bの合本、ⅢはⅢ単独。各部の問題数を写真から読み取り次第設定する。
-// attach: どの教材TODOの末尾に置くか（合本の後ろの教材に付ける）。
+// ⅠAはⅠ・Aの合本、ⅡBはⅡ・Bの合本、ⅢはⅢ単独。
+// part1/part2 は各問題・主題のサブタイトル配列。attach はぶら下げる教材のid。
 const RED_CHART_SOGO = [
-  // { label: "数学ⅠA", attach: "rc_mathA", part1: 0, part2: 0 },
-  // { label: "数学ⅡB", attach: "rc_mathB", part1: 0, part2: 0 },
-  // { label: "数学Ⅲ",  attach: "rc_math3", part1: 0, part2: 0 },
+  {
+    label: "数学ⅠA", attach: "rc_mathA",
+    part1: [ // 第1部 問題（類題とペア）
+      "平方根の大小関係", "式の値", "条件と命題", "絶対値の付いた関数のグラフと直線の共有点",
+      "絶対値の付いた関数の最大・最小", "ガウス記号と2次不等式", "値域から関数の定数決定",
+      "絶対不等式（4次式）", "絶対値の付いた2次関数のグラフの共有点の個数",
+      "円に内接する四角形の対角線の長さに関する問題", "三角形の辺に関する条件",
+      "正四面体のすべての面，辺に接する球", "玉のいろいろな並べ方", "場合の数とf(n)の関係式",
+      "平行線の間に6本の線分を引く方法", "順列・組合せと確率", "将棋の駒の移動と確率",
+      "確率の最大・最小", "図形に関する命題と証明", "三角形の内接円・外接円と証明",
+      "等式を満たす整数", "ピタゴラス数に関する問題", "3の剰余類", "素数となるための条件",
+    ],
+    part2: [ // 第2部 主題（試練とペア）
+      "集合の要素に関する証明問題", "無限降下法を利用した証明",
+      "ガウス記号と小数部分に関する方程式の問題", "関数方程式", "方程式の実数解の個数",
+      "三角比と空間図形の問題", "中央値の特定", "一筆がきの経路の数", "整数の性質と確率",
+      "ゲームと確率", "赤玉，白玉を環状に並べるときの確率", "6点間の確率問題",
+      "6n−1 の形の素数が無限にあることの証明問題", "フェルマーの大定理と無限降下法による証明",
+    ],
+  },
+  // { label: "数学ⅡB", attach: "rc_mathB", part1: [...], part2: [...] },
+  // { label: "数学Ⅲ",  attach: "rc_math3", part1: [...], part2: [...] },
 ];
 
 let _rcSeq = 100000; // CPAシード(_todoSeq)と十分離した連番
@@ -957,24 +976,26 @@ function buildRedChartTodos(books, sogo) {
   });
   // 総合演習
   (sogo || []).forEach(sg => {
-    const mkPart = (partNo, label, count, itemLabel, pairLabel) => {
-      if (!count) return;
+    // items は各問題/主題のサブタイトル配列。類題（第1部）・試練（第2部）は
+    // 1対1で付くため、例題と練習と同様にペアで取り組む（個別TODOにはしない）。
+    const mkPart = (partNo, label, items, itemLabel) => {
+      if (!items || !items.length) return;
       const pId = `${sg.attach}_sogo_p${partNo}`;
       out.push({
         id: pId, subjectId: sg.attach,
-        text: `総合演習（${sg.label}）第${partNo}部 ${label}（全${count}問）`,
+        text: `総合演習（${sg.label}）第${partNo}部 ${label}（全${items.length}問）`,
         minutes: null, status: "unwatched", done: false, createdAt: ++_rcSeq,
       });
-      for (let i = 1; i <= count; i++) {
+      items.forEach((sub, i) => {
         out.push({
           id: genId(), subjectId: sg.attach, parentId: pId,
-          text: `${itemLabel}${i}`, // ${pairLabel}は1対1で付くためペアで取り組む
+          text: `${itemLabel}${i + 1} ${sub}`,
           minutes: null, status: "unwatched", done: false, createdAt: ++_rcSeq,
         });
-      }
+      });
     };
-    mkPart(1, "問題", sg.part1, "問題", "類題");
-    mkPart(2, "主題", sg.part2, "主題", "試練");
+    mkPart(1, "問題", sg.part1, "問題");
+    mkPart(2, "主題", sg.part2, "主題");
   });
   return out;
 }
