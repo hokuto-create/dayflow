@@ -161,6 +161,32 @@ function autoScheduleOrder(a, b) {
   return (b.duration || 0) - (a.duration || 0);
 }
 
+// Active study days in [startStr, endStr] whose weekday is in `weekdays` (a Set
+// of 0=Sun..6=Sat). Used by deadline-mode auto-distribution.
+function activeDaysBetween(startStr, endStr, weekdays) {
+  const out = [];
+  let d = startStr, guard = 0;
+  while (d <= endStr && guard++ < 3660) {
+    if (weekdays.has(new Date(d + "T00:00:00").getDay())) out.push(d);
+    d = addDays(d, 1);
+  }
+  return out;
+}
+
+// The k-th (0-indexed) active day on/after startStr matching `weekdays`.
+// Used by hours-per-day mode where the end date is open-ended.
+function nthActiveDay(startStr, weekdays, k) {
+  let d = startStr, count = 0, guard = 0;
+  while (guard++ < 3660) {
+    if (weekdays.has(new Date(d + "T00:00:00").getDay())) {
+      if (count === k) return d;
+      count++;
+    }
+    d = addDays(d, 1);
+  }
+  return d;
+}
+
 /* ── INITIAL DATA ── */
 const SAMPLE_GOALS = [
   { id: "g1", title: "公認会計士 短答合格", color: C.blue, deadline: "2026-12-01", note: "2026年12月 短答式試験合格" },
@@ -2095,6 +2121,13 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [tplOpen, setTplOpen] = useState(false);
   const [tpl, setTpl] = useState({ prefix: "TX", chapters: [{ chapter: 1, sections: 10 }], suffix: "", minutes: 60, numberingMode: "perChapter" });
   const [chapterTitlesText, setChapterTitlesText] = useState("");
+  // Auto-distribute (自動分配): spread a subject's remaining units across days
+  const [autoDistIds, setAutoDistIds] = useState(null); // target todo ids, or null when modal closed
+  const [autoDistMode, setAutoDistMode] = useState("deadline"); // 'deadline' | 'hours'
+  const [autoDistDeadline, setAutoDistDeadline] = useState(addDays(todayStr(), 30));
+  const [autoDistHours, setAutoDistHours] = useState("2");
+  const [autoDistStart, setAutoDistStart] = useState(todayStr());
+  const [autoDistWeekdays, setAutoDistWeekdays] = useState([0, 1, 2, 3, 4, 5, 6]);
 
   const COLORS = [C.blue, C.green, C.accent, C.purple, C.red, C.yellow];
 
@@ -2350,6 +2383,99 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
     }]);
     if (!inWeekly(todo.id)) sendToWeekly(todo);
+  };
+
+  /* ── 自動分配 (auto-distribute over days) ── */
+  // A unit already has an open (not-done) task somewhere → skip to avoid dupes.
+  const isScheduledActive = (todoId) => tasks.some(t => t.subjectTodoId === todoId && !t.done);
+
+  // Open the modal for the given todo ids (keeps only schedulable top-level units).
+  const openAutoDist = (ids) => {
+    const list = ids.filter(id => {
+      const t = subjectTodos.find(x => x.id === id);
+      return t && isParent(t) && parentStatusOf(t) !== "done" && !isScheduledActive(t.id);
+    });
+    if (list.length === 0) return;
+    setAutoDistIds(list);
+  };
+
+  // Target units (sorted in textbook order) with their durations in hours.
+  const autoDistUnits = () => (autoDistIds || [])
+    .map(id => subjectTodos.find(t => t.id === id))
+    .filter(Boolean)
+    .filter(t => parentStatusOf(t) !== "done")
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map(t => ({ todo: t, dur: todoDuration(t) }));
+
+  // Greedy placement of units onto days. Returns [{ todo, date }].
+  const computeAutoPlacements = (units) => {
+    const placements = [];
+    const weekdays = new Set(autoDistWeekdays);
+    if (weekdays.size === 0 || units.length === 0) return placements;
+    const start = autoDistStart || todayStr();
+    const total = units.reduce((s, u) => s + u.dur, 0);
+    if (autoDistMode === "deadline") {
+      const days = activeDaysBetween(start, autoDistDeadline, weekdays);
+      if (days.length === 0) return placements;
+      const target = total / days.length;
+      let di = 0, load = 0;
+      for (const u of units) {
+        if (load > 0 && load + u.dur > target + 1e-9 && di < days.length - 1) { di++; load = 0; }
+        placements.push({ todo: u.todo, date: days[di] });
+        load += u.dur;
+      }
+    } else {
+      const target = Math.max(0.25, parseFloat(autoDistHours) || 0);
+      let di = 0, load = 0;
+      for (const u of units) {
+        if (load > 0 && load + u.dur > target + 1e-9) { di++; load = 0; }
+        placements.push({ todo: u.todo, date: nthActiveDay(start, weekdays, di) });
+        load += u.dur;
+      }
+    }
+    return placements;
+  };
+
+  const runAutoDistribute = () => {
+    const units = autoDistUnits();
+    const placements = computeAutoPlacements(units);
+    if (placements.length === 0) return;
+
+    const newTasks = placements.map(p => ({
+      id: genId(), date: p.date, title: taskTitleFor(p.todo),
+      hour: null, duration: todoDuration(p.todo), priority: "medium",
+      actual: null, done: false, note: "", goalId: null,
+      kind: "study", subjectId: p.todo.subjectId, subjectTodoId: p.todo.id,
+    }));
+    setTasks(ts => [...ts, ...newTasks]);
+
+    // Keep the month/week planning views in sync with the new schedule.
+    const monthAdds = [], weekAdds = [];
+    const seenM = new Set(), seenW = new Set();
+    placements.forEach(p => {
+      const month = p.date.slice(0, 7);
+      if (!seenM.has(month + "|" + p.todo.id)) {
+        seenM.add(month + "|" + p.todo.id);
+        monthAdds.push({ id: genId(), month, todoId: p.todo.id, subjectId: p.todo.subjectId, createdAt: Date.now() });
+      }
+      const ws = getWeekDates(p.date)[0];
+      if (!seenW.has(ws + "|" + p.todo.id)) {
+        seenW.add(ws + "|" + p.todo.id);
+        weekAdds.push({ id: genId(), weekStart: ws, todoId: p.todo.id, subjectId: p.todo.subjectId, createdAt: Date.now() });
+      }
+    });
+    setMonthlyPlans(ps => {
+      const ex = new Set(ps.map(p => p.month + "|" + p.todoId));
+      return [...ps, ...monthAdds.filter(a => !ex.has(a.month + "|" + a.todoId))];
+    });
+    setWeeklyPlans(ps => {
+      const ex = new Set(ps.map(p => p.weekStart + "|" + p.todoId));
+      return [...ps, ...weekAdds.filter(a => !ex.has(a.weekStart + "|" + a.todoId))];
+    });
+
+    setAutoDistIds(null);
+    setSelectMode(false);
+    setSelectedTodos([]);
   };
 
   // Collect an id and all its descendants (recursive) from a list
@@ -3004,6 +3130,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               style={{ ...btn(selectMode, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
               {selectMode ? "✕ 選択終了" : "☑ 複数選択"}
             </button>
+            {!selectMode && (
+              <button onClick={() => openAutoDist(parentTodos.map(t => t.id))}
+                style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px", marginLeft: "auto", whiteSpace: "nowrap" }) }}>
+                ⚡ 自動分配
+              </button>
+            )}
             {selectMode && (
               <>
                 <button onClick={() => setSelectedTodos(todos.map(t => t.id))}
@@ -3015,6 +3147,10 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 </div>
                 {selectedTodos.length > 0 && (
                   <>
+                    <button onClick={() => openAutoDist(selectedTodos)}
+                      style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px" }) }}>
+                      ⚡ 自動分配
+                    </button>
                     <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
                       style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
                       📅 月に追加
@@ -3756,6 +3892,116 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   setGrandSelectChild(null); setSelectedGrandchildren([]);
                 }}
                   style={{ ...btn(true, C.accent, { flex: 1, padding: "9px" }) }}>完了</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Auto-distribute modal */}
+      {autoDistIds && (() => {
+        const units = autoDistUnits();
+        const placements = computeAutoPlacements(units);
+        const totalH = units.reduce((s, u) => s + u.dur, 0);
+        const dayCount = new Set(placements.map(p => p.date)).size;
+        const lastDate = placements.length ? placements[placements.length - 1].date : null;
+        const weekdaysSet = new Set(autoDistWeekdays);
+        const fmtMD = (d) => { const o = new Date(d + "T00:00:00"); return `${o.getMonth() + 1}/${o.getDate()}(${DAYS_JA[o.getDay()]})`; };
+        const subjColor = activeSubjectData?.color || C.accent;
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }} onClick={() => setAutoDistIds(null)}>
+            <div style={{ ...card({ maxWidth: 420, width: "100%", maxHeight: "88vh", display: "flex", flexDirection: "column" }) }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontFamily: serif, fontSize: 17, color: C.text, marginBottom: 2 }}>⚡ 自動分配</div>
+              <div style={{ fontSize: 12, color: subjColor, marginBottom: 12 }}>
+                {activeSubjectData?.name} ・ {units.length}単位 / 計{fmtH(Math.round(totalH * 60))}
+              </div>
+
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
+                {/* Mode toggle */}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => setAutoDistMode("deadline")}
+                    style={{ ...btn(autoDistMode === "deadline", subjColor, { flex: 1, fontSize: 12, padding: "8px" }) }}>
+                    📅 期限までに
+                  </button>
+                  <button onClick={() => setAutoDistMode("hours")}
+                    style={{ ...btn(autoDistMode === "hours", subjColor, { flex: 1, fontSize: 12, padding: "8px" }) }}>
+                    ⏱ 1日あたり
+                  </button>
+                </div>
+
+                {/* Start date */}
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textMid }}>
+                  <span style={{ width: 64 }}>開始日</span>
+                  <input type="date" value={autoDistStart} min={todayStr()}
+                    onChange={e => e.target.value && setAutoDistStart(e.target.value)}
+                    style={{ ...input({ flex: 1, fontSize: 13, padding: "7px 10px" }) }} />
+                </label>
+
+                {autoDistMode === "deadline" ? (
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textMid }}>
+                    <span style={{ width: 64 }}>期限</span>
+                    <input type="date" value={autoDistDeadline} min={autoDistStart}
+                      onChange={e => e.target.value && setAutoDistDeadline(e.target.value)}
+                      style={{ ...input({ flex: 1, fontSize: 13, padding: "7px 10px" }) }} />
+                  </label>
+                ) : (
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textMid }}>
+                    <span style={{ width: 64 }}>1日あたり</span>
+                    <input type="number" min="0.25" step="0.25" value={autoDistHours}
+                      onChange={e => setAutoDistHours(e.target.value)}
+                      style={{ ...input({ width: 90, fontSize: 13, padding: "7px 10px" }) }} />
+                    <span style={{ fontSize: 12 }}>時間</span>
+                  </label>
+                )}
+
+                {/* Weekday selector */}
+                <div>
+                  <div style={{ fontSize: 12, color: C.textMid, marginBottom: 6 }}>使う曜日</div>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {DAYS_JA.map((dn, i) => {
+                      const on = weekdaysSet.has(i);
+                      return (
+                        <button key={i} onClick={() => setAutoDistWeekdays(ws =>
+                          ws.includes(i) ? ws.filter(x => x !== i) : [...ws, i]
+                        )} style={{
+                          flex: 1, padding: "7px 0", borderRadius: 6,
+                          background: on ? subjColor : C.surfaceUp,
+                          border: `1px solid ${on ? subjColor : C.border}`,
+                          color: on ? "#fff" : (i === 0 ? C.red : i === 6 ? C.blue : C.textMid),
+                          fontFamily: font, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                        }}>{dn}</button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Preview */}
+                <div style={{ ...card({ background: C.surfaceUp, padding: 12, marginBottom: 0 }) }}>
+                  {placements.length === 0 ? (
+                    <div style={{ fontSize: 12, color: C.red }}>
+                      条件に合う日がありません（曜日・期限・開始日を確認してください）
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
+                      <div><b>{units.length}</b> 単位を <b>{dayCount}</b> 日に分配</div>
+                      {autoDistMode === "deadline"
+                        ? <div>1日平均 約 <b>{(totalH / Math.max(1, dayCount)).toFixed(1)}h</b></div>
+                        : <div>終了予定 <b>{lastDate ? fmtMD(lastDate) : "–"}</b></div>}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                <button onClick={() => setAutoDistIds(null)}
+                  style={{ ...btn(false, C.textMid, { flex: 1, padding: "10px" }) }}>キャンセル</button>
+                <button onClick={runAutoDistribute} disabled={placements.length === 0}
+                  style={{ ...btn(true, subjColor, { flex: 1, padding: "10px", opacity: placements.length === 0 ? 0.5 : 1 }) }}>
+                  分配する
+                </button>
               </div>
             </div>
           </div>
