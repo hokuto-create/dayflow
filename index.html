@@ -107,6 +107,36 @@ function addDays(dateStr, n) {
   return d.toISOString().split("T")[0];
 }
 
+/* ── 間隔反復（スペースド・リピティション）ラダー ──
+   解けた/解けなかったの2択で、マークが ✖️→△→○→◎ と1段ずつ自動で進む。
+   ・初回に解けた → 復習不要（◎扱い）
+   ・解けなかった → ✖️（どの段階からでも✖️に戻る）。翌日復習。
+   ・✖️で解けた → △（3日後に復習）
+   ・△で解けた → ○（1週間後に復習）
+   ・○で解けた → ◎（復習不要）
+   understanding 1=✖️ / 2=△ / 3=○ / 4=◎。reviewDue=次回復習日(YYYY-MM-DD)、◎はnull。 */
+const SR_INTERVAL = { 1: 1, 2: 3, 3: 7 }; // ✖️→翌日, △→3日後, ○→1週間後
+const SR_MARK = {
+  1: { mark: "✕", short: "✖️", label: "翌日復習",     color: C.red },
+  2: { mark: "△", short: "△",  label: "3日後に復習",  color: C.yellow },
+  3: { mark: "○", short: "○",  label: "1週間後に復習", color: C.blue },
+  4: { mark: "◎", short: "◎",  label: "復習不要",     color: C.green },
+};
+// 現在のマーク(understanding)と結果(solved)から、次のマークと次回復習日を返す
+function srApply(understanding, solved, base) {
+  const cur = understanding || 0; // 0=未着手
+  let mark;
+  if (!solved) mark = 1;            // 解けなかった → ✖️
+  else if (cur === 0) mark = 4;     // 初回で解けた → 復習不要（◎）
+  else mark = Math.min(cur + 1, 4); // ✖️→△→○→◎
+  return { understanding: mark, reviewDue: mark >= 4 ? null : addDays(base, SR_INTERVAL[mark]) };
+}
+// マークを直接指定したときの状態（手動上書き用）
+function srSet(level, base) {
+  if (!level) return { understanding: null, reviewDue: null };
+  return { understanding: level, reviewDue: level >= 4 ? null : addDays(base, SR_INTERVAL[level]) };
+}
+
 /* ── AUTO-DISTRIBUTE HELPERS ──
    Used by the subject auto-distribution (自動分配) feature. */
 
@@ -1195,20 +1225,27 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const deleteTask = (id) => setTasks(ts => ts.filter(t => t.id !== id));
 
   // Days until next review based on understanding (1-4)
-  const REVIEW_DAYS = { 1: 1, 2: 3, 3: 7, 4: null }; // 4=◎ no review needed
-
-  const completeWithUnderstanding = (task, level) => {
-    // Mark task done
-    setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true, understanding: level } : t));
-    // Sync subject TODO
+  // 間隔反復ラダー: 解けた(solved=true)/解けなかった(false)でマークを1段進める。
+  const completeWithUnderstanding = (task, solved) => {
+    const base = todayStr(); // 「その段階になった日」を起点に次回復習日を決める
+    // 現在のマークは紐づくTODO（なければタスク）から取得して1段進める
+    let cur = task.understanding || 0;
+    if (task.subjectTodoId) {
+      const td = subjectTodos.find(x => x.id === task.subjectTodoId);
+      if (td) cur = td.understanding || 0;
+    }
+    const r = srApply(cur, solved, base);
+    const done = r.understanding >= 4;
+    // Mark task done + record mark
+    setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true, understanding: r.understanding } : t));
+    // Sync subject TODO with ladder state
     if (task.subjectTodoId) {
       setSubjectTodos(sts => sts.map(s => s.id === task.subjectTodoId
-        ? { ...s, status: "done", done: true, understanding: level } : s));
+        ? { ...s, status: done ? "done" : "reviewing", done, understanding: r.understanding, reviewDue: r.reviewDue } : s));
     }
-    // Schedule review task if not perfect
-    const days = REVIEW_DAYS[level];
-    if (days && task.kind !== "other") {
-      const reviewDate = addDays(task.date, days);
+    // Schedule review task if not mastered (◎)
+    if (r.reviewDue && task.kind !== "other") {
+      const reviewDate = r.reviewDue;
       const reviewTitle = task.title.startsWith("復習: ") ? task.title : `復習: ${task.title}`;
       // For review, use the underlying TODO's own minutes (likely short, e.g. 5min for an example)
       // Otherwise fall back to capping the original task duration at 1h
@@ -1222,7 +1259,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       setTasks(ts => [...ts, {
         id: genId(), date: reviewDate, title: reviewTitle,
         hour: null, duration: reviewDur,
-        priority: level === 1 ? "high" : level === 2 ? "medium" : "low",
+        priority: r.understanding === 1 ? "high" : r.understanding === 2 ? "medium" : "low",
         actual: null, done: false, note: "", goalId: task.goalId,
         kind: "study", subjectId: task.subjectId, subjectTodoId: task.subjectTodoId,
         isReview: true, reviewOf: task.id,
@@ -1689,15 +1726,18 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         </div>
       )}
 
-      {/* Understanding modal on complete */}
+      {/* 完了時の記録（間隔反復ラダー: 解けた/解けなかった） */}
       {understandingModal && (() => {
         const t = understandingModal;
         const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
-        const LEVELS = [
-          { lv: 4, mark: "◎", label: "万全", desc: "復習不要", color: C.green },
-          { lv: 3, mark: "○", label: "一応", desc: "1週間後に復習", color: C.blue },
-          { lv: 2, mark: "△", label: "あやふや", desc: "3日後に復習", color: C.yellow },
-          { lv: 1, mark: "✕", label: "わからない", desc: "明日復習", color: C.red },
+        const td = t.subjectTodoId ? subjectTodos.find(x => x.id === t.subjectTodoId) : null;
+        const cur = (td ? td.understanding : t.understanding) || 0;
+        const curInfo = SR_MARK[cur];
+        const okNext = SR_MARK[srApply(cur, true, todayStr()).understanding];
+        const ngNext = SR_MARK[srApply(cur, false, todayStr()).understanding];
+        const CHOICES = [
+          { solved: true,  title: "解けた",       sub: `→ ${okNext.mark}（${okNext.label}）`, color: C.green },
+          { solved: false, title: "解けなかった", sub: `→ ${ngNext.mark}（${ngNext.label}）`, color: C.red },
         ];
         return (
           <div style={{
@@ -1707,26 +1747,29 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
             <div style={{
               ...card({ maxWidth: 380, width: "100%" })
             }} onClick={e => e.stopPropagation()}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 4 }}>理解度を記録</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 4 }}>結果を記録</div>
               <div style={{ fontSize: 14, color: C.text, marginBottom: 4 }}>{t.title}</div>
-              {subjData && <div style={{ fontSize: 11, color: subjData.color, marginBottom: 14 }}>📚 {subjData.name}</div>}
+              <div style={{ fontSize: 11, color: C.textMid, marginBottom: 14 }}>
+                {subjData && <span style={{ color: subjData.color }}>📚 {subjData.name}　</span>}
+                現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {LEVELS.map(L => (
-                  <button key={L.lv} onClick={() => completeWithUnderstanding(t, L.lv)}
+                {CHOICES.map(ch => (
+                  <button key={ch.title} onClick={() => completeWithUnderstanding(t, ch.solved)}
                     style={{
                       display: "flex", alignItems: "center", gap: 12,
-                      padding: "10px 14px", borderRadius: 8,
-                      background: C.surfaceUp, border: `1px solid ${L.color}40`,
+                      padding: "12px 14px", borderRadius: 8,
+                      background: C.surfaceUp, border: `1px solid ${ch.color}55`,
                       cursor: "pointer", fontFamily: font, textAlign: "left",
                     }}>
                     <div style={{
-                      width: 32, height: 32, borderRadius: "50%", background: L.color,
-                      color: "#fff", fontWeight: 700, fontSize: 14,
+                      width: 40, height: 40, borderRadius: "50%", background: ch.color,
+                      color: "#fff", fontWeight: 700, fontSize: 18,
                       display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                    }}>{L.mark}</div>
+                    }}>{ch.solved ? "○" : "✕"}</div>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{L.label}</div>
-                      <div style={{ fontSize: 11, color: C.textMid }}>{L.desc}</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{ch.title}</div>
+                      <div style={{ fontSize: 11, color: C.textMid }}>{ch.sub}</div>
                     </div>
                   </button>
                 ))}
@@ -1920,16 +1963,22 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           setSubjectTodos(ts => ts.map(x => x.id === id ? { ...x, status, done: status === "done" } : x));
         };
         const setChildUnderstanding = (id, level) => {
+          const r = srSet(level, todayStr());
           setSubjectTodos(ts => ts.map(x => x.id === id
-            ? { ...x, understanding: level, status: x.status === "unwatched" ? "reviewing" : x.status }
+            ? { ...x, understanding: r.understanding, reviewDue: r.reviewDue,
+                status: r.understanding >= 4 ? "done" : (x.status === "unwatched" ? "reviewing" : x.status),
+                done: r.understanding >= 4 }
             : x));
         };
         const setParentStatus = (status) => {
           setSubjectTodos(ts => ts.map(x => x.id === parentTodo.id ? { ...x, status, done: status === "done" } : x));
         };
         const setParentUnderstanding = (level) => {
+          const r = srSet(level, todayStr());
           setSubjectTodos(ts => ts.map(x => x.id === parentTodo.id
-            ? { ...x, understanding: level, status: x.status === "unwatched" ? "reviewing" : x.status }
+            ? { ...x, understanding: r.understanding, reviewDue: r.reviewDue,
+                status: r.understanding >= 4 ? "done" : (x.status === "unwatched" ? "reviewing" : x.status),
+                done: r.understanding >= 4 }
             : x));
         };
         const pst = parentTodo.status || (parentTodo.done ? "done" : "unwatched");
@@ -2817,36 +2866,27 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     setSubjectTodos(ts => ts.map(t => t.id === id ? { ...t, status, done: status === "done" } : t));
   };
 
-  const REVIEW_DAYS = { 1: 1, 2: 3, 3: 7, 4: null };
+  // 間隔反復ラダー: 解けた/解けなかったでマークを1段進め、次回復習日を設定する。
+  const recordResult = (id, solved) => {
+    const base = todayStr();
+    setSubjectTodos(ts => ts.map(t => {
+      if (t.id !== id) return t;
+      const r = srApply(t.understanding, solved, base);
+      const done = r.understanding >= 4; // ◎=復習不要=完了扱い
+      return { ...t, understanding: r.understanding, reviewDue: r.reviewDue, status: done ? "done" : "reviewing", done };
+    }));
+  };
+  // マークを直接指定する手動上書き（同じマーク再タップで解除）。
   const setUnderstanding = (id, level) => {
-    const todo = subjectTodos.find(t => t.id === id);
-    setSubjectTodos(ts => ts.map(t => t.id === id ? { ...t, understanding: level } : t));
-    // Schedule review if not perfect and we have a value
-    const days = level && REVIEW_DAYS[level];
-    if (days && todo) {
-      const reviewDate = addDays(todayStr(), days);
-      // Check if review task already exists for this todo on/after today
-      const existingReview = tasks.find(t => t.subjectTodoId === id && t.isReview && t.date >= todayStr() && !t.done);
-      // Compute review duration: if todo has children (parent), use parent+children sum; else use todo.minutes
-      const childMin = subjectTodos.filter(c => c.parentId === todo.id).reduce((s, c) => s + (c.minutes || 0), 0);
-      const totalMin = (todo.minutes || 0) + childMin;
-      const reviewDur = totalMin ? Math.max(1/60, totalMin / 60) : 1;
-      if (existingReview) {
-        // Update existing review date and duration
-        setTasks(ts => ts.map(t => t.id === existingReview.id ? { ...t, date: reviewDate, duration: reviewDur } : t));
-      } else {
-        const baseTitle = taskTitleFor(todo);
-        const reviewTitle = baseTitle.startsWith("復習: ") ? baseTitle : `復習: ${baseTitle}`;
-        setTasks(ts => [...ts, {
-          id: genId(), date: reviewDate, title: reviewTitle,
-          hour: null, duration: reviewDur,
-          priority: level === 1 ? "high" : level === 2 ? "medium" : "low",
-          actual: null, done: false, note: "", goalId: null,
-          kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
-          isReview: true,
-        }]);
-      }
-    }
+    const base = todayStr();
+    setSubjectTodos(ts => ts.map(t => {
+      if (t.id !== id) return t;
+      const r = srSet(level, base);
+      const done = r.understanding >= 4;
+      return { ...t, understanding: r.understanding, reviewDue: r.reviewDue,
+        status: r.understanding ? (done ? "done" : "reviewing") : (t.status === "done" ? "reviewing" : t.status),
+        done: r.understanding ? done : false };
+    }));
   };
 
   // Current month key (YYYY-MM)
@@ -3747,6 +3787,66 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
             ))}
           </div>
 
+          {/* 今日の復習（全教材・全科目から、復習日が来た項目を集約） */}
+          {(() => {
+            const today = todayStr();
+            const due = subjectTodos
+              .filter(t => t.reviewDue && t.reviewDue <= today && t.understanding >= 1 && t.understanding <= 3)
+              .sort((a, b) => (a.reviewDue || "").localeCompare(b.reviewDue || ""));
+            if (due.length === 0) return null;
+            const shown = due.slice(0, 40);
+            return (
+              <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff0eb", borderColor: C.red + "55" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 8, letterSpacing: 0.5 }}>
+                  🔁 今日の復習（{due.length}件）
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {shown.map(item => {
+                    const subj = subjects.find(s => s.id === item.subjectId);
+                    const parent = item.parentId ? subjectTodos.find(p => p.id === item.parentId) : null;
+                    const M = SR_MARK[item.understanding];
+                    const overdue = item.reviewDue < today;
+                    return (
+                      <div key={item.id} style={{
+                        display: "flex", alignItems: "center", gap: 8,
+                        padding: "6px 8px", borderRadius: 6,
+                        background: C.surface, border: `1px solid ${C.border}`,
+                      }}>
+                        <span style={{
+                          width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
+                          background: M.color, color: "#fff", fontSize: 12, fontWeight: 700,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>{M.mark}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, color: C.text, fontWeight: 500,
+                            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.text}</div>
+                          <div style={{ fontSize: 9, color: C.textMid, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {subj && <span style={{ color: subj.color, fontWeight: 600 }}>{subj.name}</span>}
+                            {parent && <span> · {parent.text}</span>}
+                            {overdue && <span style={{ color: C.red, marginLeft: 4 }}>● 期限超過</span>}
+                          </div>
+                        </div>
+                        <button onClick={() => recordResult(item.id, true)}
+                          style={{ padding: "4px 10px", borderRadius: 6, background: C.green,
+                            border: `1px solid ${C.green}`, color: "#fff", fontSize: 11, fontWeight: 700,
+                            cursor: "pointer", lineHeight: 1, fontFamily: font, flexShrink: 0 }}>解けた</button>
+                        <button onClick={() => recordResult(item.id, false)}
+                          style={{ padding: "4px 10px", borderRadius: 6, background: "transparent",
+                            border: `1px solid ${C.red}`, color: C.red, fontSize: 11, fontWeight: 700,
+                            cursor: "pointer", lineHeight: 1, fontFamily: font, flexShrink: 0 }}>解けない</button>
+                      </div>
+                    );
+                  })}
+                  {due.length > shown.length && (
+                    <div style={{ fontSize: 10, color: C.textMid, textAlign: "center", paddingTop: 2 }}>
+                      ほか {due.length - shown.length} 件
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Todo list */}
           <div style={{ ...card({ padding: 0 }) }}>
             {todos.length === 0 ? (
@@ -3974,7 +4074,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                   <button key={lv} onClick={() => {
                                     setSubjectTodos(ts => ts.map(x =>
                                       selectedChildren.includes(x.id)
-                                        ? { ...x, understanding: lv, status: x.status === "unwatched" ? "reviewing" : x.status }
+                                        ? { ...x, ...srSet(lv, todayStr()), status: lv >= 4 ? "done" : (x.status === "unwatched" ? "reviewing" : x.status), done: lv >= 4 }
                                         : x
                                     ));
                                   }} title={lbl}
@@ -4034,12 +4134,9 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       reviewing: { bg: C.yellow, color: "#fff", border: C.yellow, mark: "◐" },
                       done: { bg: activeSubjectData.color, color: "#fff", border: activeSubjectData.color, mark: "✓" },
                     }[cst];
-                    const U = {
-                      1: { label: "わからない", color: C.red },
-                      2: { label: "あやふや",   color: C.yellow },
-                      3: { label: "一応",       color: C.blue },
-                      4: { label: "万全",       color: C.green },
-                    }[c.understanding];
+                    const U = SR_MARK[c.understanding];
+                    const cDue = c.reviewDue && c.understanding && c.understanding < 4 ? c.reviewDue : null;
+                    const cDueToday = cDue && cDue <= todayStr();
                     return (
                       <div key={c.id} style={{
                         padding: "5px 0", opacity: cst === "done" ? 0.6 : 1,
@@ -4088,8 +4185,14 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                               {U && (
                                 <span style={{
                                   background: U.color + "20", color: U.color,
-                                  padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600,
-                                }}>{U.label}</span>
+                                  padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700,
+                                }}>{U.mark}</span>
+                              )}
+                              {cDue && (
+                                <span style={{
+                                  fontSize: 9, fontWeight: 600,
+                                  color: cDueToday ? C.red : C.textMid,
+                                }}>{cDueToday ? "● 今日復習" : `次回 ${cDue.slice(5).replace("-", "/")}`}</span>
                               )}
                               {c.minutes ? <span style={{ fontSize: 10, color: activeSubjectData.color }}>{fmtH(c.minutes)}</span> : null}
                               <button onClick={() => {
@@ -4107,26 +4210,31 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                             </>
                           )}
                         </div>
-                        {/* Understanding buttons (shown when reviewing or done) */}
-                        {(cst === "reviewing" || cst === "done") && editTodoId !== c.id && childSelectParent !== t.id && (
-                          <div style={{ display: "flex", gap: 5, marginTop: 6, marginLeft: 36 }}>
-                            {[
-                              [1, "✕", C.red, "わからない"],
-                              [2, "△", C.yellow, "あやふや"],
-                              [3, "○", C.blue, "一応"],
-                              [4, "◎", C.green, "万全"],
-                            ].map(([lv, mark, col, lbl]) => (
-                              <button key={lv} onClick={() => setUnderstanding(c.id, c.understanding === lv ? null : lv)}
-                                title={lbl}
+                        {/* 間隔反復ラダー: 解けた/解けなかった（◎=復習不要の項目は非表示） */}
+                        {editTodoId !== c.id && childSelectParent !== t.id && c.understanding !== 4 && (
+                          <div style={{ display: "flex", gap: 6, marginTop: 6, marginLeft: 36, alignItems: "center" }}>
+                            <button onClick={() => recordResult(c.id, true)}
+                              style={{
+                                padding: "4px 12px", borderRadius: 6,
+                                background: C.green, border: `1px solid ${C.green}`,
+                                color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                                lineHeight: 1, fontFamily: font,
+                              }}>解けた</button>
+                            <button onClick={() => recordResult(c.id, false)}
+                              style={{
+                                padding: "4px 12px", borderRadius: 6,
+                                background: "transparent", border: `1px solid ${C.red}`,
+                                color: C.red, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                                lineHeight: 1, fontFamily: font,
+                              }}>解けなかった</button>
+                            {c.understanding && (
+                              <button onClick={() => setUnderstanding(c.id, null)} title="マークを消す"
                                 style={{
-                                  width: 30, height: 30, borderRadius: 6,
-                                  background: c.understanding === lv ? col : "transparent",
-                                  border: `1px solid ${c.understanding === lv ? col : C.border}`,
-                                  color: c.understanding === lv ? "#fff" : C.textDim,
-                                  fontSize: 14, fontWeight: 700, cursor: "pointer",
-                                  padding: 0, lineHeight: 1, fontFamily: font,
-                                }}>{mark}</button>
-                            ))}
+                                  padding: "4px 8px", borderRadius: 6, background: "transparent",
+                                  border: `1px solid ${C.border}`, color: C.textDim, fontSize: 10,
+                                  cursor: "pointer", lineHeight: 1, fontFamily: font,
+                                }}>リセット</button>
+                            )}
                           </div>
                         )}
                         {/* Grandchild layer (problems within a section) — material mode only */}
