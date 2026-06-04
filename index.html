@@ -2054,6 +2054,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [selectedTodos, setSelectedTodos] = useState([]);
   const [bulkMonthPicker, setBulkMonthPicker] = useState(false);
   const [bulkMonthIds, setBulkMonthIds] = useState([]); // which todo ids the month picker acts on (parent/child/grandchild)
+  const [addOpen, setAddOpen] = useState(false); // 「＋追加」を押すと追加方法が開く
   const [addTab, setAddTab] = useState("single"); // "single" | "bulk" | "seq" — unified 追加タブ
   const [bulkText, setBulkText] = useState("");
   const [tpl, setTpl] = useState({ prefix: "TX", chapters: [{ chapter: 1, sections: 10 }], suffix: "", minutes: 60, numberingMode: "perChapter" });
@@ -2846,6 +2847,14 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
             )}
           </div>
 
+          {/* 「＋追加」を押すと追加方法（1件ずつ/まとめて/連番）が開く */}
+          <button onClick={() => setAddOpen(o => !o)}
+            style={{ ...btn(addOpen, activeSubjectData.color, { width: "100%", padding: "9px", fontSize: 13, fontWeight: 700 }) }}>
+            {addOpen ? "× 閉じる" : "＋ 追加"}
+          </button>
+
+          {addOpen && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {/* 追加タブ: 1件ずつ / まとめて / 連番 */}
           <div style={{ display: "flex", gap: 4, background: C.surfaceUp, padding: 3, borderRadius: 8 }}>
             {[
@@ -3070,6 +3079,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               </div>
             );
           })()}
+          </div>
+          )}
 
           {/* Filter */}
           <div style={{ display: "flex", gap: 4, overflowX: "auto" }}>
