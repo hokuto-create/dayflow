@@ -1204,6 +1204,36 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const dayTasks = tasks.filter(t => t.date === selectedDate && t.hour != null).sort((a, b) => a.hour - b.hour);
   const unscheduledTasks = tasks.filter(t => t.date === selectedDate && t.hour == null);
 
+  // 時間が重なるタスクをカレンダー風に横並び（列分割）で配置するためのレイアウト計算。
+  // 各タスクに { col: 列番号, cols: その重なりグループの総列数 } を割り当てる。
+  const taskLayout = (() => {
+    const sorted = [...dayTasks].sort((a, b) => (a.hour - b.hour) || ((a.hour + a.duration) - (b.hour + b.duration)));
+    const result = {};
+    let cluster = [];        // 現在処理中の「互いに重なる」タスク群
+    let clusterEnd = -Infinity;
+    const flush = () => {
+      if (!cluster.length) return;
+      const colEnds = [];    // 各列が現在埋まっている終了時刻
+      cluster.forEach(t => {
+        let placed = false;
+        for (let i = 0; i < colEnds.length; i++) {
+          if (t.hour >= colEnds[i]) { colEnds[i] = t.hour + t.duration; result[t.id].col = i; placed = true; break; }
+        }
+        if (!placed) { result[t.id].col = colEnds.length; colEnds.push(t.hour + t.duration); }
+      });
+      cluster.forEach(t => { result[t.id].cols = colEnds.length; });
+      cluster = [];
+    };
+    sorted.forEach(t => {
+      if (cluster.length && t.hour >= clusterEnd) { flush(); clusterEnd = -Infinity; }
+      result[t.id] = { col: 0, cols: 1 };
+      cluster.push(t);
+      clusterEnd = Math.max(clusterEnd, t.hour + t.duration);
+    });
+    flush();
+    return result;
+  })();
+
   const saveTask = () => {
     if (!form.title.trim()) return;
     if (editId) {
@@ -1487,18 +1517,28 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           const fracOffset = (t.hour - baseHour) * 44;
           const top = startIdx * 44 + fracOffset + 4;
           const height = t.duration * 44 - 8;
+          // 重なりグループ内での横位置。列数に応じて幅を分割し、重なって表示されないようにする。
+          const { col, cols } = taskLayout[t.id] || { col: 0, cols: 1 };
+          const gap = cols > 1 ? 4 : 0;
+          const left = `calc(52px + (100% - 60px) * ${col} / ${cols})`;
+          const width = `calc((100% - 60px) / ${cols} - ${gap}px)`;
           return (
             <div key={t.id} onClick={(e) => {
               // Don't open modal if clicking action buttons
               if (e.target.tagName === "BUTTON" || e.target.closest("button")) return;
               if (t.subjectTodoId) setExamplesModal(t);
             }} style={{
-              position: "absolute", top, left: 52, right: 8, height,
+              position: "absolute", top, left, width, height,
               background: t.kind === "other" ? "#ececec" : t.isReview ? "#fff5e6" : "#fbeee4",
               border: `1px solid ${t.kind === "other" ? "#bfbfbf" : t.isReview ? C.yellow : C.accentSoft}`,
               borderRadius: 8, padding: "6px 10px",
-              display: "flex", alignItems: "center", gap: 8,
+              display: "flex",
+              flexDirection: cols > 1 ? "column" : "row",
+              alignItems: cols > 1 ? "stretch" : "center",
+              justifyContent: "center",
+              gap: cols > 1 ? 4 : 8,
               boxSizing: "border-box",
+              overflow: "hidden",
               zIndex: 2,
               cursor: t.subjectTodoId ? "pointer" : "default",
             }}>
@@ -1525,7 +1565,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   )}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+              <div style={{ display: "flex", gap: 4, flexShrink: 0, flexWrap: "wrap", justifyContent: cols > 1 ? "flex-start" : "flex-end" }}>
                 <button onClick={() => toggleDone(t)}
                   style={{ ...btn(t.done, C.green, { padding: "3px 7px", fontSize: 11 }) }}>
                   {t.done ? "✓" : "○"}
