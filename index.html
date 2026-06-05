@@ -116,6 +116,8 @@ function addDays(dateStr, n) {
    ・○で解けた → ◎（復習不要）
    understanding 1=✖️ / 2=△ / 3=○ / 4=◎。reviewDue=次回復習日(YYYY-MM-DD)、◎はnull。 */
 const SR_INTERVAL = { 1: 1, 2: 3, 3: 7 }; // ✖️→翌日, △→3日後, ○→1週間後
+// 赤チャート専用: 例題が◎(完璧)になってから「練習」を開始するまでの待機日数。
+const PRACTICE_DELAY_DAYS = 14; // 2週間後に練習へ
 const SR_MARK = {
   1: { mark: "✕", short: "✖️", label: "翌日復習",     color: C.red },
   2: { mark: "△", short: "△",  label: "3日後に復習",  color: C.yellow },
@@ -517,7 +519,8 @@ const SAMPLE_SUBJECT_TODOS = [
 /* ── 赤チャート（趣味勉強 > 高校数学）TODOデータ ──
    各教材（数学Ⅰ/A/Ⅱ/B/Ⅲ）ごとに、章＝親TODO、例題＝子TODOで構成する。
    ・例題番号は教科書通り「教材ごとの連番」（章をまたいで通し番号）。
-   ・各例題には1対1で「練習」が付くが、例題とペアで取り組むため例題TODOに含める。
+   ・各例題には1対1で「練習」が付く。練習は例題が◎(完璧)になった2週間後に、
+     別TODOとして自動生成し独自の間隔反復ラダーで管理する（completeWithUnderstanding 参照）。
    ・演習問題・総合演習は全章を終えた後に取り組む独立TODO。
    chapters[].examples は例題のサブタイトル（例題名）を順に並べた配列。
    写真から読み取り次第、各章の examples を追記していく。 */
@@ -1303,6 +1306,39 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         isReview: true, reviewOf: task.id,
       }]);
     }
+    // 赤チャートの例題が◎(完璧)に到達したら、対応する「練習」を2週間後に開始する。
+    // 練習は例題と1対1で、例題とは別TODOとして独自の間隔反復ラダーを持つ。
+    if (done && task.subjectTodoId) {
+      const ex = subjectTodos.find(x => x.id === task.subjectTodoId);
+      const isRedChartExample = ex && (ex.subjectId || "").startsWith("rc_")
+        && /^例題/.test(ex.text || "") && !ex.practiceTodoId;
+      if (isRedChartExample) {
+        const practiceId = genId();
+        // 「例題12 ○○」→「練習12 ○○」（番号・サブタイトルはそのまま流用）
+        const practiceTodo = {
+          id: practiceId, subjectId: ex.subjectId, parentId: ex.parentId,
+          text: ex.text.replace(/^例題/, "練習"), minutes: ex.minutes ?? null,
+          status: "unwatched", done: false, createdAt: Date.now(),
+          understanding: null, reviewDue: null, practiceOf: ex.id,
+        };
+        // 例題に練習IDを記録して二重生成を防ぎつつ、練習TODOを追加する。
+        setSubjectTodos(sts => [
+          ...sts.map(s => s.id === ex.id ? { ...s, practiceTodoId: practiceId } : s),
+          practiceTodo,
+        ]);
+        // 2週間後に練習タスクをスケジュール。完了時は completeWithUnderstanding が走り、
+        // 練習自身がラダー(✖️→△→○→◎)で復習管理される。
+        const practiceDur = ex.minutes ? Math.max(1/60, ex.minutes / 60) : 1;
+        setTasks(ts => [...ts, {
+          id: genId(), date: addDays(base, PRACTICE_DELAY_DAYS),
+          title: buildTaskTitle(practiceTodo, subjects),
+          hour: null, duration: practiceDur, priority: "medium",
+          actual: null, done: false, note: "", goalId: task.goalId,
+          kind: "study", subjectId: ex.subjectId, subjectTodoId: practiceId,
+          isPractice: true,
+        }]);
+      }
+    }
     setUnderstandingModal(null);
   };
 
@@ -1475,6 +1511,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                     {fmtDur(t.duration)}
                     {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
                     {t.isReview && <span style={{ color: C.yellow, marginLeft: 6, fontWeight: 700 }}>🔁 復習</span>}
+                    {t.isPractice && <span style={{ color: C.accent, marginLeft: 6, fontWeight: 700 }}>📝 練習</span>}
                   </div>
                 </div>
                 <button onClick={() => setScheduleModal(t)}
@@ -1585,6 +1622,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                       🎯 {goals.find(g => g.id === t.goalId).title.slice(0, 8)}…
                     </span>
                   )}
+                  {t.isPractice && <span style={{ marginLeft: 8, color: C.accent, fontWeight: 700 }}>📝 練習</span>}
                 </div>
                 )}
               </div>
