@@ -1206,7 +1206,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
 
   // 短いタスクでも内容（タイトル・操作ボタン）が収まる最小のカード高さ(px)。
   // これより短い予定はこの高さまで引き伸ばして描画する。
-  const MIN_CARD_H = 44;
+  const MIN_CARD_H = 56;
   // カードの「描画範囲」が重なるタスクをカレンダー風に横並び（列分割）で配置するレイアウト計算。
   // 時間の重複だけでなく、短いタスクが最小高さによって下のタスクに被るケースも重なりとして扱う。
   // 各タスクに { col: 列番号, cols: その重なりグループの総列数 } を割り当てる。
@@ -1531,8 +1531,10 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           const gap = cols > 1 ? 4 : 0;
           const left = `calc(52px + (100% - 60px) * ${col} / ${cols})`;
           const width = `calc((100% - 60px) / ${cols} - ${gap}px)`;
-          // 横並び（幅が狭い）かつ高さに余裕があるときだけ、内容を縦積みにして読みやすくする。
-          const stack = cols > 1 && height >= 60;
+          // 横並び（幅が狭い）ときは内容を縦積みにし、タイトルが操作ボタンに押し出されないようにする。
+          const stack = cols > 1;
+          // 縦積みで背の低いカードは、タイトルと操作ボタンを優先して時刻などの補足情報は省略する。
+          const showMeta = !stack || height >= 72;
           return (
             <div key={t.id} onClick={(e) => {
               // Don't open modal if clicking action buttons
@@ -1557,6 +1559,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text, textDecoration: t.done ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {t.title}
                 </div>
+                {showMeta && (
                 <div style={{ fontSize: 11, color: C.textMid, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {fmtTime(t.hour)}〜{fmtTime(t.hour + t.duration)}
                   {t.kind !== "other" && (
@@ -1575,6 +1578,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                     </span>
                   )}
                 </div>
+                )}
               </div>
               <div style={{ display: "flex", gap: 4, flexShrink: 0, flexWrap: stack ? "wrap" : "nowrap", justifyContent: stack ? "flex-start" : "flex-end" }}>
                 <button onClick={() => toggleDone(t)}
