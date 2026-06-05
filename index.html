@@ -1535,6 +1535,14 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           const stack = cols > 1;
           // 縦積みで背の低いカードは、タイトルと操作ボタンを優先して時刻などの補足情報は省略する。
           const showMeta = !stack || height >= 72;
+          // 復習タスクは元の論点から TX 番号（例: tx5）を補って表示する（未スケジュール一覧と同じ表記）。
+          const txLabel = reviewTxLabel(t);
+          const PREFIX = "復習: ";
+          const displayTitle = txLabel
+            ? (t.title.startsWith(PREFIX)
+                ? `${PREFIX}${txLabel} ${t.title.slice(PREFIX.length)}`
+                : `${txLabel} ${t.title}`)
+            : t.title;
           return (
             <div key={t.id} onClick={(e) => {
               // Don't open modal if clicking action buttons
@@ -1557,7 +1565,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text, textDecoration: t.done ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {t.title}
+                  {displayTitle}
                 </div>
                 {showMeta && (
                 <div style={{ fontSize: 11, color: C.textMid, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
