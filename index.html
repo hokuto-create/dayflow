@@ -2809,6 +2809,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [autoDistHours, setAutoDistHours] = useState("2");
   const [autoDistStart, setAutoDistStart] = useState(todayStr());
   const [autoDistWeekdays, setAutoDistWeekdays] = useState([0, 1, 2, 3, 4, 5, 6]);
+  // 章を横断して例題を1問ずつ巡回配置する（幅優先・広く学ぶ）。
+  const [autoDistInterleave, setAutoDistInterleave] = useState(false);
 
   const COLORS = [C.blue, C.green, C.accent, C.purple, C.red, C.yellow];
 
@@ -3090,6 +3092,27 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       .filter(Boolean)
       .filter(t => parentStatusOf(t) !== "done")
       .sort((a, b) => a.createdAt - b.createdAt);
+    // 章を横断して1問ずつ（幅優先）。例: 1章例題1 → 2章例題1 → … → 1章例題2 → …
+    // 各章の「未完了・未スケジュールの例題」をキューにし、章をまたいで順に取り出す。
+    // （chunkBoundary設定に関わらず、常に例題単位で分配する）
+    if (autoDistInterleave) {
+      // 演習問題・総合演習は章の例題巡回の対象外（章のみを横断する）。
+      const chapters = parents.filter(p => !/^(演習問題|総合演習)/.test(p.text || ""));
+      const queues = chapters.map(p =>
+        descendantsOf(p.id)
+          .filter(c => getChildren(c.id).length === 0)  // 末端（例題）のみ
+          .filter(c => !c.practiceOf)                    // 自動生成の「練習」は対象外
+          .filter(c => parentStatusOf(c) !== "done" && !isScheduledActive(c.id))
+      ).filter(q => q.length);
+      const out = [];
+      const maxLen = queues.reduce((m, q) => Math.max(m, q.length), 0);
+      for (let lvl = 0; lvl < maxLen; lvl++) {
+        for (const q of queues) {
+          if (lvl < q.length) out.push({ todo: q[lvl], dur: todoDuration(q[lvl]) });
+        }
+      }
+      return out;
+    }
     const units = [];
     parents.forEach(p => {
       if (chunkBoundary) {
@@ -4744,6 +4767,30 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                     <span style={{ fontSize: 12 }}>時間</span>
                   </label>
                 )}
+
+                {/* 章を横断して1問ずつ（広く学ぶ） */}
+                <button onClick={() => setAutoDistInterleave(v => !v)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, width: "100%",
+                    background: autoDistInterleave ? subjColor + "14" : "transparent",
+                    border: `1px solid ${autoDistInterleave ? subjColor : C.border}`,
+                    borderRadius: 8, padding: "9px 10px", cursor: "pointer",
+                    fontFamily: font, textAlign: "left",
+                  }}>
+                  <span style={{
+                    width: 20, height: 20, borderRadius: 5, flexShrink: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    border: `2px solid ${autoDistInterleave ? subjColor : C.border}`,
+                    background: autoDistInterleave ? subjColor : "transparent",
+                    color: "#fff", fontSize: 13, fontWeight: 700,
+                  }}>{autoDistInterleave ? "✓" : ""}</span>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>🔀 章を横断して1問ずつ</span>
+                    <span style={{ display: "block", fontSize: 11, color: C.textMid, marginTop: 1 }}>
+                      1章例題1→2章例題1→…と各章を巡回（広く学ぶ）
+                    </span>
+                  </span>
+                </button>
 
                 {/* Weekday selector */}
                 <div>
