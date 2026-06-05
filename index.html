@@ -3060,8 +3060,16 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   };
 
   /* ── 自動分配 (auto-distribute over days) ── */
-  // A unit already has an open (not-done) task somewhere → skip to avoid dupes.
-  const isScheduledActive = (todoId) => tasks.some(t => t.subjectTodoId === todoId && !t.done);
+  // 再分配で置き換える対象＝「先の予定」: 開始日(autoDistStart)以降の、未完了で
+  // 復習/練習でない自動分配タスク。再分配時はこれらを一度消して新しく入れ直す。
+  const isReplaceablePlanTask = (t) =>
+    !!t.subjectTodoId && !t.done && !t.isReview && !t.isPractice
+    && t.date >= (autoDistStart || todayStr());
+  // ユニットが「確定済み」で再分配の対象外か。完了済み、または置き換え対象でない
+  // 未完了タスク（過去の予定・復習中など）を持つ場合はスキップする。置き換え対象の
+  // 先の予定しか持たないユニットは、消して入れ直せるので対象に含める。
+  const isScheduledActive = (todoId) =>
+    tasks.some(t => t.subjectTodoId === todoId && !t.done && !isReplaceablePlanTask(t));
 
   // Open the modal for the given todo ids (keeps only schedulable top-level units).
   const openAutoDist = (ids) => {
@@ -3161,13 +3169,24 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     const placements = computeAutoPlacements(units);
     if (placements.length === 0) return;
 
+    // 再分配は「予定変更」とみなす: 対象範囲（選択した章とその例題）の先の予定を
+    // いったん削除してから、新しい配置で入れ直す。完了済み・過去・復習・練習は残す。
+    const scopeIds = new Set();
+    (autoDistIds || []).forEach(id => {
+      scopeIds.add(id);
+      descendantsOf(id).forEach(d => scopeIds.add(d.id));
+    });
+
     const newTasks = placements.map(p => ({
       id: genId(), date: p.date, title: taskTitleFor(p.todo),
       hour: null, duration: p.dur ?? todoDuration(p.todo), priority: "medium",
       actual: null, done: false, note: "", goalId: null,
       kind: "study", subjectId: p.todo.subjectId, subjectTodoId: p.todo.id,
     }));
-    setTasks(ts => [...ts, ...newTasks]);
+    setTasks(ts => [
+      ...ts.filter(t => !(scopeIds.has(t.subjectTodoId) && isReplaceablePlanTask(t))),
+      ...newTasks,
+    ]);
 
     // Keep the month/week planning views in sync with the new schedule.
     const monthAdds = [], weekAdds = [];
@@ -3184,13 +3203,18 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         weekAdds.push({ id: genId(), weekStart: ws, todoId: p.todo.id, subjectId: p.todo.subjectId, createdAt: Date.now() });
       }
     });
+    // 再分配したユニットの古い月次・週次マーカーは消してから入れ直す（古い週/月への
+    // 取り残しを防ぐ）。再分配対象外のユニットのマーカーはそのまま残す。
+    const replanTodoIds = new Set(placements.map(p => p.todo.id));
     setMonthlyPlans(ps => {
-      const ex = new Set(ps.map(p => p.month + "|" + p.todoId));
-      return [...ps, ...monthAdds.filter(a => !ex.has(a.month + "|" + a.todoId))];
+      const kept = ps.filter(p => !replanTodoIds.has(p.todoId));
+      const ex = new Set(kept.map(p => p.month + "|" + p.todoId));
+      return [...kept, ...monthAdds.filter(a => !ex.has(a.month + "|" + a.todoId))];
     });
     setWeeklyPlans(ps => {
-      const ex = new Set(ps.map(p => p.weekStart + "|" + p.todoId));
-      return [...ps, ...weekAdds.filter(a => !ex.has(a.weekStart + "|" + a.todoId))];
+      const kept = ps.filter(p => !replanTodoIds.has(p.todoId));
+      const ex = new Set(kept.map(p => p.weekStart + "|" + p.todoId));
+      return [...kept, ...weekAdds.filter(a => !ex.has(a.weekStart + "|" + a.todoId))];
     });
 
     setAutoDistIds(null);
@@ -4719,6 +4743,10 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         const weekdaysSet = new Set(autoDistWeekdays);
         const fmtMD = (d) => { const o = new Date(d + "T00:00:00"); return `${o.getMonth() + 1}/${o.getDate()}(${DAYS_JA[o.getDay()]})`; };
         const subjColor = activeSubjectData?.color || C.accent;
+        // 再分配で置き換えられる既存の先の予定の件数（プレビュー注意書き用）。
+        const scopeIds = new Set();
+        (autoDistIds || []).forEach(id => { scopeIds.add(id); descendantsOf(id).forEach(d => scopeIds.add(d.id)); });
+        const replaceCount = tasks.filter(t => scopeIds.has(t.subjectTodoId) && isReplaceablePlanTask(t)).length;
         return (
           <div style={{
             position: "fixed", inset: 0, background: "#0008", zIndex: 100,
@@ -4825,6 +4853,11 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       {autoDistMode === "deadline"
                         ? <div>1日平均 約 <b>{(totalH / Math.max(1, dayCount)).toFixed(1)}h</b></div>
                         : <div>終了予定 <b>{lastDate ? fmtMD(lastDate) : "–"}</b></div>}
+                      {replaceCount > 0 && (
+                        <div style={{ color: C.red, marginTop: 4 }}>
+                          ⚠️ 既存の先の予定 <b>{replaceCount}</b> 件を置き換えます
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
