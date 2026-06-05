@@ -1204,31 +1204,39 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const dayTasks = tasks.filter(t => t.date === selectedDate && t.hour != null).sort((a, b) => a.hour - b.hour);
   const unscheduledTasks = tasks.filter(t => t.date === selectedDate && t.hour == null);
 
-  // 時間が重なるタスクをカレンダー風に横並び（列分割）で配置するためのレイアウト計算。
+  // 短いタスクでも内容（タイトル・操作ボタン）が収まる最小のカード高さ(px)。
+  // これより短い予定はこの高さまで引き伸ばして描画する。
+  const MIN_CARD_H = 44;
+  // カードの「描画範囲」が重なるタスクをカレンダー風に横並び（列分割）で配置するレイアウト計算。
+  // 時間の重複だけでなく、短いタスクが最小高さによって下のタスクに被るケースも重なりとして扱う。
   // 各タスクに { col: 列番号, cols: その重なりグループの総列数 } を割り当てる。
   const taskLayout = (() => {
-    const sorted = [...dayTasks].sort((a, b) => (a.hour - b.hour) || ((a.hour + a.duration) - (b.hour + b.duration)));
+    // 各タスクの縦方向の描画範囲(px)。1時間=44px、最小高さ MIN_CARD_H を考慮する。
+    const boxes = dayTasks.map(t => {
+      const top = t.hour * 44;
+      return { id: t.id, top, bottom: top + Math.max(t.duration * 44 - 8, MIN_CARD_H) };
+    }).sort((a, b) => (a.top - b.top) || (a.bottom - b.bottom));
     const result = {};
-    let cluster = [];        // 現在処理中の「互いに重なる」タスク群
-    let clusterEnd = -Infinity;
+    let cluster = [];          // 現在処理中の「描画範囲が互いに重なる」タスク群
+    let clusterBottom = -Infinity;
     const flush = () => {
       if (!cluster.length) return;
-      const colEnds = [];    // 各列が現在埋まっている終了時刻
-      cluster.forEach(t => {
+      const colBottoms = [];   // 各列が現在埋まっている下端(px)
+      cluster.forEach(b => {
         let placed = false;
-        for (let i = 0; i < colEnds.length; i++) {
-          if (t.hour >= colEnds[i]) { colEnds[i] = t.hour + t.duration; result[t.id].col = i; placed = true; break; }
+        for (let i = 0; i < colBottoms.length; i++) {
+          if (b.top >= colBottoms[i]) { colBottoms[i] = b.bottom; result[b.id].col = i; placed = true; break; }
         }
-        if (!placed) { result[t.id].col = colEnds.length; colEnds.push(t.hour + t.duration); }
+        if (!placed) { result[b.id].col = colBottoms.length; colBottoms.push(b.bottom); }
       });
-      cluster.forEach(t => { result[t.id].cols = colEnds.length; });
+      cluster.forEach(b => { result[b.id].cols = colBottoms.length; });
       cluster = [];
     };
-    sorted.forEach(t => {
-      if (cluster.length && t.hour >= clusterEnd) { flush(); clusterEnd = -Infinity; }
-      result[t.id] = { col: 0, cols: 1 };
-      cluster.push(t);
-      clusterEnd = Math.max(clusterEnd, t.hour + t.duration);
+    boxes.forEach(b => {
+      if (cluster.length && b.top >= clusterBottom) { flush(); clusterBottom = -Infinity; }
+      result[b.id] = { col: 0, cols: 1 };
+      cluster.push(b);
+      clusterBottom = Math.max(clusterBottom, b.bottom);
     });
     flush();
     return result;
@@ -1516,12 +1524,15 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           if (startIdx < 0) return null;
           const fracOffset = (t.hour - baseHour) * 44;
           const top = startIdx * 44 + fracOffset + 4;
-          const height = t.duration * 44 - 8;
+          // 短いタスクでも内容が収まるよう最小高さを確保する（被り判定の boxes と一致させる）。
+          const height = Math.max(t.duration * 44 - 8, MIN_CARD_H);
           // 重なりグループ内での横位置。列数に応じて幅を分割し、重なって表示されないようにする。
           const { col, cols } = taskLayout[t.id] || { col: 0, cols: 1 };
           const gap = cols > 1 ? 4 : 0;
           const left = `calc(52px + (100% - 60px) * ${col} / ${cols})`;
           const width = `calc((100% - 60px) / ${cols} - ${gap}px)`;
+          // 横並び（幅が狭い）かつ高さに余裕があるときだけ、内容を縦積みにして読みやすくする。
+          const stack = cols > 1 && height >= 60;
           return (
             <div key={t.id} onClick={(e) => {
               // Don't open modal if clicking action buttons
@@ -1533,10 +1544,10 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               border: `1px solid ${t.kind === "other" ? "#bfbfbf" : t.isReview ? C.yellow : C.accentSoft}`,
               borderRadius: 8, padding: "6px 10px",
               display: "flex",
-              flexDirection: cols > 1 ? "column" : "row",
-              alignItems: cols > 1 ? "stretch" : "center",
+              flexDirection: stack ? "column" : "row",
+              alignItems: stack ? "stretch" : "center",
               justifyContent: "center",
-              gap: cols > 1 ? 4 : 8,
+              gap: stack ? 4 : 8,
               boxSizing: "border-box",
               overflow: "hidden",
               zIndex: 2,
@@ -1565,7 +1576,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   )}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 4, flexShrink: 0, flexWrap: "wrap", justifyContent: cols > 1 ? "flex-start" : "flex-end" }}>
+              <div style={{ display: "flex", gap: 4, flexShrink: 0, flexWrap: stack ? "wrap" : "nowrap", justifyContent: stack ? "flex-start" : "flex-end" }}>
                 <button onClick={() => toggleDone(t)}
                   style={{ ...btn(t.done, C.green, { padding: "3px 7px", fontSize: 11 }) }}>
                   {t.done ? "✓" : "○"}
