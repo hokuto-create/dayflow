@@ -158,6 +158,15 @@ function abbrevTitle(title) {
   return (title || "").replace(/赤チャート数学/g, "赤茶");
 }
 
+// 横並び（幅が狭い）カード向けに、例題/練習番号までを残してサブタイトルを落とした
+// 短いラベルを作る。例:「赤茶Ⅱ 例題56 復素数の四則計算…」→「赤茶Ⅱ 例題56」。
+// 番号が見つからないときは略称化した元タイトルをそのまま返す。
+function compactTitle(title) {
+  const s = abbrevTitle(title);
+  const m = s.match(/^(.*?(?:例題|練習|問題|問|Q)\s*\d+)/);
+  return m ? m[1] : s;
+}
+
 // Active study days in [startStr, endStr] whose weekday is in `weekdays` (a Set
 // of 0=Sun..6=Sat). Used by deadline-mode auto-distribution.
 function activeDaysBetween(startStr, endStr, weekdays) {
@@ -1213,9 +1222,9 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const dayTasks = tasks.filter(t => t.date === selectedDate && t.hour != null).sort((a, b) => a.hour - b.hour);
   const unscheduledTasks = tasks.filter(t => t.date === selectedDate && t.hour == null);
 
-  // 短いタスクでも内容（タイトル・操作ボタン）が収まる最小のカード高さ(px)。
+  // 短いタスクでも内容（2行までのタイトル・操作ボタン）が収まる最小のカード高さ(px)。
   // これより短い予定はこの高さまで引き伸ばして描画する。
-  const MIN_CARD_H = 56;
+  const MIN_CARD_H = 72;
   // カードの「描画範囲」が重なるタスクをカレンダー風に横並び（列分割）で配置するレイアウト計算。
   // 時間の重複だけでなく、短いタスクが最小高さによって下のタスクに被るケースも重なりとして扱う。
   // 各タスクに { col: 列番号, cols: その重なりグループの総列数 } を割り当てる。
@@ -1576,8 +1585,9 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           const width = `calc((100% - 60px) / ${cols} - ${gap}px)`;
           // 横並び（幅が狭い）ときは内容を縦積みにし、タイトルが操作ボタンに押し出されないようにする。
           const stack = cols > 1;
-          // 縦積みで背の低いカードは、タイトルと操作ボタンを優先して時刻などの補足情報は省略する。
-          const showMeta = !stack || height >= 72;
+          // 縦積み（横並び）カードは幅・高さに余裕がないので、補足情報は出さずタイトル
+          // （＝例題番号）と操作ボタンを優先する。
+          const showMeta = !stack;
           // 復習タスクは元の論点から TX 番号（例: tx5）を補って表示する（未スケジュール一覧と同じ表記）。
           const txLabel = reviewTxLabel(t);
           const PREFIX = "復習: ";
@@ -1599,16 +1609,18 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               display: "flex",
               flexDirection: stack ? "column" : "row",
               alignItems: stack ? "stretch" : "center",
-              justifyContent: "center",
+              // 横並びカードは上揃え。内容が収まりきらなくても1行目（例題番号）が
+              // 切れないようにする。広いカードは従来どおり中央揃え。
+              justifyContent: stack ? "flex-start" : "center",
               gap: stack ? 4 : 8,
               boxSizing: "border-box",
               overflow: "hidden",
               zIndex: 2,
               cursor: t.subjectTodoId ? "pointer" : "default",
             }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, textDecoration: t.done ? "line-through" : "none", lineHeight: 1.25, display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden", wordBreak: "break-word" }}>
-                  {abbrevTitle(displayTitle)}
+              <div style={{ flex: stack ? "none" : 1, minWidth: 0 }}>
+                <div style={{ fontSize: stack ? 12 : 13, fontWeight: 600, color: C.text, textDecoration: t.done ? "line-through" : "none", lineHeight: 1.25, display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden", wordBreak: "break-word" }}>
+                  {stack ? compactTitle(displayTitle) : abbrevTitle(displayTitle)}
                 </div>
                 {showMeta && (
                 <div style={{ fontSize: 11, color: C.textMid, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -1639,8 +1651,8 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 </button>
                 <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, hour: null } : x))}
                   title="時間を外す" style={{ ...btn(false, C.yellow, { padding: "3px 7px", fontSize: 11 }) }}>⏱</button>
-                <button onClick={() => startEdit(t)} style={{ ...btn(false, C.blue, { padding: "3px 8px", fontSize: 11, minWidth: 28 }) }}>編集</button>
-                <button onClick={() => askDeleteTask(t.id)} style={{ ...btn(confirmDeleteTask === t.id, C.red, { padding: "3px 8px", fontSize: 11, minWidth: 28 }) }}>
+                <button onClick={() => startEdit(t)} style={{ ...btn(false, C.blue, { padding: "3px 8px", fontSize: 11, minWidth: stack ? 0 : 28 }) }}>{stack ? "✎" : "編集"}</button>
+                <button onClick={() => askDeleteTask(t.id)} style={{ ...btn(confirmDeleteTask === t.id, C.red, { padding: "3px 8px", fontSize: 11, minWidth: stack ? 0 : 28 }) }}>
                   {confirmDeleteTask === t.id ? "削除" : "✕"}
                 </button>
               </div>
