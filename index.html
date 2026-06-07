@@ -167,6 +167,19 @@ function compactTitle(title) {
   return m ? m[1] : s;
 }
 
+// 横並び（幅が狭い）カードの復習タスク向けラベル。狭いカードだと「復習: tx1 例題41」は
+// 先頭の「復習: tx1 」が2行を使い切り、肝心の問題番号（例題41）が切れてしまう。
+// そこで問題番号を先頭に出し、どれだけ幅が狭くても番号が必ず読めるようにする
+// （復習であることはカードの配色で示す）。tx 番号は番号の後ろに添える。
+// 例:「復習: tx1 例題41 損益計算書…」→「例題41 tx1」
+function compactReviewTitle(title) {
+  const body = abbrevTitle(title).replace(/^復習[:：]\s*/, "");
+  const m = body.match(/^(.*?)((?:例題|練習|問題|問|Q)\s*\d+)/);
+  if (!m) return compactTitle(title);
+  const lead = m[1].trim();
+  return lead ? `${m[2]} ${lead}` : m[2];
+}
+
 // Active study days in [startStr, endStr] whose weekday is in `weekdays` (a Set
 // of 0=Sun..6=Sat). Used by deadline-mode auto-distribution.
 function activeDaysBetween(startStr, endStr, weekdays) {
@@ -1620,7 +1633,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
             }}>
               <div style={{ flex: stack ? "none" : 1, minWidth: 0 }}>
                 <div style={{ fontSize: stack ? 12 : 13, fontWeight: 600, color: C.text, textDecoration: t.done ? "line-through" : "none", lineHeight: 1.25, display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden", wordBreak: "break-word" }}>
-                  {stack ? compactTitle(displayTitle) : abbrevTitle(displayTitle)}
+                  {stack ? (t.isReview ? compactReviewTitle(displayTitle) : compactTitle(displayTitle)) : abbrevTitle(displayTitle)}
                 </div>
                 {showMeta && (
                 <div style={{ fontSize: 11, color: C.textMid, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
