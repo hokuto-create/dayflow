@@ -152,6 +152,12 @@ function buildTaskTitle(todo, subjects) {
   return todo.text;
 }
 
+// スケジュール表示用にタイトルを短縮する。狭いカードでも例題番号まで読めるよう、
+// 教材名「赤チャート数学X」を「赤茶X」のように略す（データ自体は変更しない）。
+function abbrevTitle(title) {
+  return (title || "").replace(/赤チャート数学/g, "赤茶");
+}
+
 // Active study days in [startStr, endStr] whose weekday is in `weekdays` (a Set
 // of 0=Sun..6=Sat). Used by deadline-mode auto-distribution.
 function activeDaysBetween(startStr, endStr, weekdays) {
@@ -1453,7 +1459,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, color: C.text, fontWeight: 500,
                       whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
-                    }}>{t.title}</div>
+                    }}>{abbrevTitle(t.title)}</div>
                     <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
                       {daysLate}日遅れ
                       {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
@@ -1506,7 +1512,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   <div style={{ fontSize: 13, color: C.text, fontWeight: 500,
                     textDecoration: t.done ? "line-through" : "none",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
-                  }}>{displayTitle}</div>
+                  }}>{abbrevTitle(displayTitle)}</div>
                   <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
                     {fmtDur(t.duration)}
                     {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
@@ -1601,8 +1607,8 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               cursor: t.subjectTodoId ? "pointer" : "default",
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, textDecoration: t.done ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {displayTitle}
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, textDecoration: t.done ? "line-through" : "none", lineHeight: 1.25, display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden", wordBreak: "break-word" }}>
+                  {abbrevTitle(displayTitle)}
                 </div>
                 {showMeta && (
                 <div style={{ fontSize: 11, color: C.textMid, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
