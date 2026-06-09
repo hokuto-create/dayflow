@@ -2311,12 +2311,18 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
 
   const tomorrow = addDays(selectedDate, 1);
 
-  const [carriedIds, setCarriedIds] = useState([]);
+  // 繰越は元タスクに carriedOver フラグを立てて即座に永続化する。
+  // 「明日の計画を立てる」を押さなくても保存され、リロードしても繰越済みの
+  // 表示が残るため、同じタスクを二重に繰り越してしまうことがない。
   const carryOver = (taskId) => {
-    const t = tasks.find(x => x.id === taskId);
-    if (!t) return;
-    setTasks(ts => [...ts, { ...t, id: genId(), date: tomorrow, hour: null, done: false, actual: null }]);
-    setCarriedIds(ids => [...ids, taskId]);
+    setTasks(ts => {
+      const t = ts.find(x => x.id === taskId);
+      if (!t || t.carriedOver) return ts;
+      return [
+        ...ts.map(x => x.id === taskId ? { ...x, carriedOver: true } : x),
+        { ...t, id: genId(), date: tomorrow, hour: null, done: false, actual: null, carriedOver: false },
+      ];
+    });
   };
 
   const moods = ["😫","😕","😐","🙂","😄"];
@@ -2413,7 +2419,7 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
           {notDone.map(t => (
             <div key={t.id} style={{ padding: "7px 0", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 13, color: C.text, flex: 1 }}>{reviewDisplayTitle(t)}</span>
-              {carriedIds.includes(t.id) ? (
+              {t.carriedOver ? (
                 <span style={{ fontSize: 11, color: C.green, fontWeight: 700, padding: "3px 9px" }}>✓ 繰越済</span>
               ) : (
                 <button onClick={() => carryOver(t.id)} style={{ ...btn(false, C.accent, { fontSize: 11, padding: "3px 9px" }) }}>
