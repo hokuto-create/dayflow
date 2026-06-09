@@ -1186,7 +1186,7 @@ const VIEWS = [
   { id: "goals",   label: "ゴール", icon: "🎯" },
 ];
 
-function Nav({ view, setView }) {
+function Nav({ view, setView, reviewPending }) {
   return (
     <div style={{
       display: "flex", gap: 4, padding: "8px 16px",
@@ -1199,7 +1199,13 @@ function Nav({ view, setView }) {
           display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap",
           padding: "6px 12px",
         }}>
-          <span>{v.icon}</span>
+          {/* 今日の振り返りが未記録のときは赤ドットで知らせ、やり忘れを防ぐ */}
+          <span style={{ position: "relative", display: "inline-flex" }}>
+            {v.icon}
+            {v.id === "review" && reviewPending && (
+              <span style={{ position: "absolute", top: -3, right: -5, width: 7, height: 7, borderRadius: "50%", background: C.red, border: `1px solid ${C.surface}` }} />
+            )}
+          </span>
           <span style={{ fontSize: 12 }}>{v.label}</span>
         </button>
       ))}
@@ -2254,11 +2260,23 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
 /* ══════════════════════════════════════════════════════
    REVIEW VIEW (振り返り)
 ══════════════════════════════════════════════════════ */
-function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, subjects, subjectTodos, settings, goals }) {
+function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, subjects, subjectTodos, settings, goals, reviews, setReviews }) {
   const [reviewType, setReviewType] = useState("day"); // day | week | month
-  const [memo, setMemo] = useState("");
-  const [mood, setMood] = useState(null);
-  const [tomorrowTheme, setTomorrowTheme] = useState("");
+  // 振り返りの記録は日付ごとに永続化する。これにより「この日の振り返りをしたか」が
+  // あとから分かり、メモ・気分・明日のテーマもリロードや日付移動で消えない。
+  const review = reviews[selectedDate] || {};
+  const updateReview = (patch) => setReviews(prev => {
+    const cur = prev[selectedDate] || {};
+    return { ...prev, [selectedDate]: { ...cur, ...patch } };
+  });
+  const memo = review.memo || "";
+  const setMemo = (v) => updateReview({ memo: v });
+  const mood = review.mood ?? null;
+  const setMood = (v) => updateReview({ mood: v });
+  const tomorrowTheme = review.tomorrowTheme || "";
+  const setTomorrowTheme = (v) => updateReview({ tomorrowTheme: v });
+  const completedAt = review.completedAt || null;
+  const toggleCompleted = () => updateReview({ completedAt: completedAt ? null : new Date().toISOString() });
 
   const dayTasks = tasks.filter(t => t.date === selectedDate).sort((a, b) => (a.hour ?? 99) - (b.hour ?? 99));
   const done = dayTasks.filter(t => t.done);
@@ -2326,12 +2344,35 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
         <div style={{ flex: 1, textAlign: "center", fontFamily: serif, fontSize: 17, color: C.text, cursor: "pointer", position: "relative" }}
           onClick={() => document.getElementById("date-jump-review")?.showPicker?.()}>
           {new Date(selectedDate + "T00:00:00").toLocaleDateString("ja-JP", { month: "long", day: "numeric" })} の振り返り
+          {completedAt && <span style={{ marginLeft: 6, fontSize: 12, color: C.green, fontWeight: 700 }}>✓済</span>}
           <input id="date-jump-review" type="date" value={selectedDate}
             onChange={e => e.target.value && setSelectedDate(e.target.value)}
             style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", border: "none" }} />
         </div>
         <button onClick={() => setSelectedDate(addDays(selectedDate, 1))} style={{ ...btn(), padding: "5px 10px" }}>›</button>
         <button onClick={() => setSelectedDate(todayStr())} style={{ ...btn(false, C.accent, { fontSize: 11, padding: "5px 9px" }) }}>今日</button>
+      </div>
+
+      {/* 振り返り完了ステータス：この日の振り返りをしたかが一目で分かり、
+          記録忘れ・二重実施を防ぐ。 */}
+      <div style={{ ...card(), display: "flex", alignItems: "center", gap: 10,
+        borderColor: completedAt ? C.green + "66" : C.border,
+        background: completedAt ? C.green + "14" : C.surface }}>
+        <div style={{ fontSize: 22 }}>{completedAt ? "✅" : "📝"}</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: completedAt ? C.green : C.textMid }}>
+            {completedAt ? "振り返り済み" : "まだ振り返っていません"}
+          </div>
+          {completedAt && (
+            <div style={{ fontSize: 10, color: C.textDim }}>
+              {new Date(completedAt).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} に記録
+            </div>
+          )}
+        </div>
+        <button onClick={toggleCompleted}
+          style={{ ...btn(!completedAt, C.green, { fontSize: 12, padding: "8px 12px", whiteSpace: "nowrap" }) }}>
+          {completedAt ? "取り消す" : "振り返り完了 ✓"}
+        </button>
       </div>
 
       {/* Stats */}
@@ -2410,7 +2451,7 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
         <div style={{ fontSize: 12, fontWeight: 700, color: C.accent, marginBottom: 8 }}>明日の集中テーマ</div>
         <input style={input()} placeholder="例：Webアプリの設計を固める"
           value={tomorrowTheme} onChange={e => setTomorrowTheme(e.target.value)} />
-        <button onClick={() => { setSelectedDate(tomorrow); setView("day"); }} style={{ ...btn(true, C.accent, { width: "100%", marginTop: 10, padding: "9px" }) }}>
+        <button onClick={() => { if (!completedAt) updateReview({ completedAt: new Date().toISOString() }); setSelectedDate(tomorrow); setView("day"); }} style={{ ...btn(true, C.accent, { width: "100%", marginTop: 10, padding: "9px" }) }}>
           明日の計画を立てる →
         </button>
       </div>
@@ -6065,6 +6106,7 @@ function App() {
   const [subjectTodos, setSubjectTodos] = usePersistedState("subjectTodos", SAMPLE_SUBJECT_TODOS);
   const [monthlyPlans, setMonthlyPlans] = usePersistedState("monthlyPlans", []);
   const [weeklyPlans, setWeeklyPlans] = usePersistedState("weeklyPlans", []);
+  const [reviews, setReviews] = usePersistedState("reviews", {}); // 日付ごとの振り返り記録（完了フラグ含む）
   const [settings, setSettings] = usePersistedState("settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true });
   const [syncEmail, setSyncEmail] = usePersistedState("syncEmail", "");
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error
@@ -6110,6 +6152,7 @@ function App() {
         if (src.subjectTodos) setSubjectTodos(src.subjectTodos);
         if (src.monthlyPlans) setMonthlyPlans(src.monthlyPlans);
         if (src.weeklyPlans) setWeeklyPlans(src.weeklyPlans);
+        if (src.reviews) setReviews(src.reviews);
         if (src.settings) setSettings(src.settings);
         if (src.subjectCategories) setSubjectCategories(src.subjectCategories);
         setLastSyncedAt(Date.now());
@@ -6121,7 +6164,7 @@ function App() {
   // Push to cloud (debounced 3s) when data changes
   useEffect(() => {
     if (!syncEmail || !initialPulledRef.current) return;
-    const payload = { tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings, subjectCategories };
+    const payload = { tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, reviews, settings, subjectCategories };
     const serialized = JSON.stringify(payload);
     if (serialized === lastPushedDataRef.current) return;
     const timer = setTimeout(() => {
@@ -6137,7 +6180,7 @@ function App() {
       });
     }, 3000);
     return () => clearTimeout(timer);
-  }, [syncEmail, tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, settings, subjectCategories]);
+  }, [syncEmail, tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, reviews, settings, subjectCategories]);
 
   // Manual pull
   const manualPull = async () => {
@@ -6153,6 +6196,7 @@ function App() {
       if (src.subjectTodos) setSubjectTodos(src.subjectTodos);
       if (src.monthlyPlans) setMonthlyPlans(src.monthlyPlans);
       if (src.weeklyPlans) setWeeklyPlans(src.weeklyPlans);
+      if (src.reviews) setReviews(src.reviews);
       if (src.settings) setSettings(src.settings);
       if (src.subjectCategories) setSubjectCategories(src.subjectCategories);
       lastPushedDataRef.current = JSON.stringify(src);
@@ -6162,6 +6206,13 @@ function App() {
       setSyncStatus("synced");
     }
   };
+
+  // 今日タスクがあるのに今日の振り返りが未完了なら「やり忘れ」とみなしてナビに印を出す
+  const reviewPending = (() => {
+    const t = todayStr();
+    const hasTasks = tasks.some(x => x.date === t);
+    return hasTasks && !(reviews[t] && reviews[t].completedAt);
+  })();
 
   const resetAll = () => {
     const keysToRemove = [];
@@ -6217,12 +6268,12 @@ function App() {
         <button onClick={() => setShowSettings(true)} style={{ ...btn(false, C.textMid, { padding: "5px 10px", fontSize: 14 }) }}>⚙</button>
       </div>
 
-      <Nav view={view} setView={setView} />
+      <Nav view={view} setView={setView} reviewPending={reviewPending} />
 
       {/* Views */}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {view === "day"    && <DayView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} goals={goals} subjects={subjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} settings={settings} />}
-        {view === "review" && <ReviewView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} setView={setView} subjects={subjects} subjectTodos={subjectTodos} settings={settings} goals={goals} />}
+        {view === "review" && <ReviewView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} setView={setView} subjects={subjects} subjectTodos={subjectTodos} settings={settings} goals={goals} reviews={reviews} setReviews={setReviews} />}
         {view === "subjects" && <SubjectsView subjects={subjects} setSubjects={setSubjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} goals={goals} subjectCategories={subjectCategories} setSubjectCategories={setSubjectCategories} settings={settings} />}
         {view === "week"   && <WeekView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} settings={settings} />}
         {view === "month"  && <MonthView goals={goals} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} selectedDate={selectedDate} tasks={tasks} settings={settings} />}
