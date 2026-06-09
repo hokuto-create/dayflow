@@ -6105,6 +6105,14 @@ function App() {
       window.removeEventListener("focus", checkAndReset);
     };
   }, []);
+
+  // 1分ごとに再描画し、開きっぱなしでも20時をまたいだ時点で振り返りの印が出るようにする
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(n => n + 1), 60000);
+    return () => clearInterval(id);
+  }, []);
+
   const [tasks, setTasks] = usePersistedState("tasks", makeSampleTasks(today));
   const [goals, setGoals] = usePersistedState("goals", SAMPLE_GOALS);
   const [subjects, setSubjects] = usePersistedState("subjects", SAMPLE_SUBJECTS);
@@ -6213,8 +6221,11 @@ function App() {
     }
   };
 
-  // 今日タスクがあるのに今日の振り返りが未完了なら「やり忘れ」とみなしてナビに印を出す
+  // 夜（20時以降）に、今日タスクがあるのに今日の振り返りが未完了なら
+  // 「やり忘れ」とみなしてナビに印を出す。昼間は出さない。
+  const REVIEW_REMIND_HOUR = 20;
   const reviewPending = (() => {
+    if (new Date().getHours() < REVIEW_REMIND_HOUR) return false;
     const t = todayStr();
     const hasTasks = tasks.some(x => x.date === t);
     return hasTasks && !(reviews[t] && reviews[t].completedAt);
