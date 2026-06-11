@@ -71,8 +71,27 @@ const serif = "'Playfair Display', serif";
 
 /* ── HELPERS ── */
 const genId = () => Math.random().toString(36).slice(2, 9);
-const todayStr = () => new Date().toISOString().split("T")[0];
 const fmt2 = (n) => String(n).padStart(2, "0");
+// ローカルタイムゾーンで YYYY-MM-DD を返す（toISOStringはUTC基準のため、日本では朝9時まで前日の日付になってしまう）
+const dateToStr = (d) => `${d.getFullYear()}-${fmt2(d.getMonth() + 1)}-${fmt2(d.getDate())}`;
+
+/* ── 「論理的な今日」の境界 ──
+   日付の切り替えを実際の0時ではなく、タイムライン終了時刻と翌日の開始時刻の
+   中間時刻で行う。例: 表示時間が5時〜26時なら、26時(深夜2時)と翌日5時(=29時)の
+   中間 = 27.5時 = 深夜3:30。深夜3:29までは前日の日付を「今日」として扱う。 */
+function calcDayBoundaryHour(startHour, endHour) {
+  const s = Number(startHour), e = Number(endHour);
+  if (!isFinite(s) || !isFinite(e)) return 0; // 設定が壊れていたら0時切り替えに戻す
+  return ((e + s + 24) / 2) % 24;
+}
+let DAY_BOUNDARY_HOUR = calcDayBoundaryHour(5, 26); // App が settings から毎描画で更新する
+const setDayBoundaryHour = (startHour, endHour) => { DAY_BOUNDARY_HOUR = calcDayBoundaryHour(startHour, endHour); };
+
+const todayStr = () => {
+  const now = new Date();
+  if (now.getHours() + now.getMinutes() / 60 < DAY_BOUNDARY_HOUR) now.setDate(now.getDate() - 1);
+  return dateToStr(now);
+};
 const fmtTime = (h) => {
   const hh = Math.floor(h);
   const mm = String(Math.round((h - hh) * 60)).padStart(2, "0");
@@ -90,21 +109,15 @@ const DAYS_JA = ["日", "月", "火", "水", "木", "金", "土"];
 const MONTHS_JA = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
 
 function getWeekDates(baseDate) {
-  const d = new Date(baseDate);
-  const day = d.getDay();
-  const mon = new Date(d);
-  mon.setDate(d.getDate() - ((day + 6) % 7));
-  return Array.from({ length: 7 }, (_, i) => {
-    const x = new Date(mon);
-    x.setDate(mon.getDate() + i);
-    return x.toISOString().split("T")[0];
-  });
+  const [y, m, d] = baseDate.split("-").map(Number);
+  const day = new Date(y, m - 1, d).getDay();
+  const monOffset = (day + 6) % 7;
+  return Array.from({ length: 7 }, (_, i) => dateToStr(new Date(y, m - 1, d - monOffset + i)));
 }
 
 function addDays(dateStr, n) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split("T")[0];
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return dateToStr(new Date(y, m - 1, d + n));
 }
 
 /* ── 間隔反復（スペースド・リピティション）ラダー ──
@@ -5403,10 +5416,7 @@ function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeekl
   const month = viewingDate.getMonth();
   const thisMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const days = Array.from({ length: daysInMonth }, (_, i) => {
-    const d = new Date(year, month, i + 1);
-    return d.toISOString().split("T")[0];
-  });
+  const days = Array.from({ length: daysInMonth }, (_, i) => dateToStr(new Date(year, month, i + 1)));
   const weekDates = getWeekDates(selectedDate);
   const isViewingCurrentMonth = monthOffset === 0;
 
@@ -6087,6 +6097,9 @@ function usePersistedState(key, initial) {
 }
 
 function App() {
+  const [settings, setSettings] = usePersistedState("settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true });
+  // todayStr() を呼ぶ前に、表示時間の設定から「論理的な今日」の境界を反映する
+  setDayBoundaryHour(settings.dayStartHour, settings.dayEndHour);
   const today = todayStr();
   const [view, setView] = useState("day");
   const [selectedDate, setSelectedDate] = useState(today);
@@ -6121,7 +6134,6 @@ function App() {
   const [monthlyPlans, setMonthlyPlans] = usePersistedState("monthlyPlans", []);
   const [weeklyPlans, setWeeklyPlans] = usePersistedState("weeklyPlans", []);
   const [reviews, setReviews] = usePersistedState("reviews", {}); // 日付ごとの振り返り記録（完了フラグ含む）
-  const [settings, setSettings] = usePersistedState("settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true });
   const [syncEmail, setSyncEmail] = usePersistedState("syncEmail", "");
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error
   const [lastSyncedAt, setLastSyncedAt] = useState(0);
@@ -6223,9 +6235,12 @@ function App() {
 
   // 夜（20時以降）に、今日タスクがあるのに今日の振り返りが未完了なら
   // 「やり忘れ」とみなしてナビに印を出す。昼間は出さない。
+  // 0時を過ぎても日付境界（タイムライン終了と翌日開始の中間）までは同じ「夜」として扱う。
   const REVIEW_REMIND_HOUR = 20;
   const reviewPending = (() => {
-    if (new Date().getHours() < REVIEW_REMIND_HOUR) return false;
+    const now = new Date();
+    const hm = now.getHours() + now.getMinutes() / 60;
+    if (hm < REVIEW_REMIND_HOUR && hm >= DAY_BOUNDARY_HOUR) return false;
     const t = todayStr();
     const hasTasks = tasks.some(x => x.date === t);
     return hasTasks && !(reviews[t] && reviews[t].completedAt);
