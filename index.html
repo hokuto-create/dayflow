@@ -1137,6 +1137,52 @@ function mergeRedChart({ subjects, subjectTodos, subjectCategories }) {
   };
 }
 
+// 既存CPAの「テキストの例題」（動画TODOの子）を「例題」タブ（track:"example"）へ移行する。
+// 旧構造: 動画TODO(=TX章, 親) ─ 例題(子)。
+// 新構造: 動画は「動画視聴」タブ、例題は「例題」タブに分離したいので、
+//   動画TODOごとに同名の例題用コンテナ(track:"example")を作り、その子に例題を付け替える。
+// 子は parentId だけ書き換え、理解度(understanding)・復習日(reviewDue)・ステータス等は
+// そのまま保持する。子のidは不変なので、紐づく予定/復習タスクも壊れない。
+// 子が例題コンテナ配下へ移った後は「動画トラックの親に子が無い」状態になるため冪等。
+function migrateCpaExampleTrack({ subjectTodos, subjects }) {
+  const cpaSubjectIds = new Set(
+    (subjects || [])
+      .filter(s => (s.category || "CPA勉強") === "CPA勉強")
+      .map(s => s.id)
+  );
+  if (cpaSubjectIds.size === 0) return { subjectTodos, moved: 0 };
+  const isVideoTrack = (t) => !t.track || t.track === "video";
+  const hasChild = new Set(subjectTodos.filter(t => t.parentId).map(t => t.parentId));
+  // 子を持つ「動画トラックのCPA親」= 旧構造のTX章
+  const legacyParents = subjectTodos.filter(t =>
+    !t.parentId && isVideoTrack(t) && cpaSubjectIds.has(t.subjectId) && hasChild.has(t.id)
+  );
+  if (legacyParents.length === 0) return { subjectTodos, moved: 0 };
+
+  const remap = new Map(); // 旧親id -> 新・例題コンテナid
+  const newParents = [];
+  legacyParents.forEach(p => {
+    const newId = genId();
+    remap.set(p.id, newId);
+    // 例題コンテナは入れ物。動画の分数や視聴ステータスは引き継がない（minutesは子から集計）。
+    newParents.push({
+      id: newId, subjectId: p.subjectId, text: p.text,
+      minutes: null, status: "unwatched", done: false,
+      track: "example", createdAt: p.createdAt,
+    });
+  });
+  let moved = 0;
+  // 旧親の「直接の子」のみ付け替える。孫以下は子idを参照しているため自動的に追従する。
+  const out = subjectTodos.map(t => {
+    if (t.parentId && remap.has(t.parentId)) {
+      moved++;
+      return { ...t, parentId: remap.get(t.parentId) };
+    }
+    return t;
+  });
+  return { subjectTodos: [...out, ...newParents], moved };
+}
+
 /* ── SHARED STYLES ── */
 const card = (extra = {}) => ({
   background: C.surface,
@@ -6189,6 +6235,19 @@ function App() {
       return toAdd.length ? [...prev, ...toAdd] : prev;
     });
     setSubjectCategories(prev => (prev || []).includes("趣味勉強") ? prev : [...(prev || []), "趣味勉強"]);
+  }, [syncEmail, syncStatus]);
+
+  // 既存CPAの例題（動画TODOの子）を「例題」タブへ一度だけ移行する。
+  // 赤チャート移行と同様、メール設定済みなら初回クラウド取得の完了後に実行する。
+  const cpaExMigratedRef = useRef(false);
+  useEffect(() => {
+    if (cpaExMigratedRef.current) return;
+    if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
+    cpaExMigratedRef.current = true;
+    setSubjectTodos(prev => {
+      const r = migrateCpaExampleTrack({ subjectTodos: prev, subjects });
+      return r.moved ? r.subjectTodos : prev;
+    });
   }, [syncEmail, syncStatus]);
 
   // Pull from cloud on initial load if email is set
