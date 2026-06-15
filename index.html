@@ -1183,6 +1183,42 @@ function migrateCpaExampleTrack({ subjectTodos, subjects }) {
   return { subjectTodos: [...out, ...newParents], moved };
 }
 
+// CPA: 各「動画視聴」TODO(=TX章)と同じ親を「例題」「トレーニング」タブにも用意する。
+// 3タブが同じ章立て（同じ親一覧）になるよう、不足しているトラックにコンテナを作る。
+// 既に同名(subjectId+track+text)の親があるタブには作らない（冪等）。子は引き継がない。
+function ensureCpaParallelParents({ subjectTodos, subjects }) {
+  const cpaSubjectIds = new Set(
+    (subjects || [])
+      .filter(s => (s.category || "CPA勉強") === "CPA勉強")
+      .map(s => s.id)
+  );
+  if (cpaSubjectIds.size === 0) return { subjectTodos, added: 0 };
+  const isVideoTrack = (t) => !t.track || t.track === "video";
+  const videoParents = subjectTodos.filter(t =>
+    !t.parentId && isVideoTrack(t) && cpaSubjectIds.has(t.subjectId)
+  );
+  if (videoParents.length === 0) return { subjectTodos, added: 0 };
+  // 既存の親キー: subjectId|track|text（track未設定は "video" とみなす）
+  const existing = new Set(
+    subjectTodos.filter(t => !t.parentId).map(t => `${t.subjectId}|${t.track || "video"}|${t.text}`)
+  );
+  const toAdd = [];
+  videoParents.forEach(p => {
+    ["example", "training"].forEach(track => {
+      const key = `${p.subjectId}|${track}|${p.text}`;
+      if (existing.has(key)) return;
+      existing.add(key);
+      // 入れ物（章コンテナ）。動画の分数・視聴ステータスは引き継がない。
+      toAdd.push({
+        id: genId(), subjectId: p.subjectId, text: p.text,
+        minutes: null, status: "unwatched", done: false,
+        track, createdAt: p.createdAt,
+      });
+    });
+  });
+  return toAdd.length ? { subjectTodos: [...subjectTodos, ...toAdd], added: toAdd.length } : { subjectTodos, added: 0 };
+}
+
 /* ── SHARED STYLES ── */
 const card = (extra = {}) => ({
   background: C.surface,
@@ -6245,8 +6281,13 @@ function App() {
     if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
     cpaExMigratedRef.current = true;
     setSubjectTodos(prev => {
-      const r = migrateCpaExampleTrack({ subjectTodos: prev, subjects });
-      return r.moved ? r.subjectTodos : prev;
+      let next = prev;
+      const r = migrateCpaExampleTrack({ subjectTodos: next, subjects });
+      if (r.moved) next = r.subjectTodos;
+      // 例題・トレーニングタブにも動画と同じ親（章立て）を用意する。
+      const r2 = ensureCpaParallelParents({ subjectTodos: next, subjects });
+      if (r2.added) next = r2.subjectTodos;
+      return next === prev ? prev : next;
     });
   }, [syncEmail, syncStatus]);
 
