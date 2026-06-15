@@ -2866,6 +2866,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [editTodoMinutes, setEditTodoMinutes] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [filter, setFilter] = useState("all"); // all | active | done
+  // CPA勉強の教材タブ（動画視聴 / 例題 / トレーニング）。素材カテゴリでは使わない。
+  const [activeTrack, setActiveTrack] = useState("video"); // "video" | "example" | "training"
   const [monthPickerTodo, setMonthPickerTodo] = useState(null);
   const [editSubjectId, setEditSubjectId] = useState(null);
   const [editSubjectName, setEditSubjectName] = useState("");
@@ -2891,6 +2893,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [autoDistInterleave, setAutoDistInterleave] = useState(false);
 
   const COLORS = [C.blue, C.green, C.accent, C.purple, C.red, C.yellow];
+  // CPA勉強の教材種別タブ。既存TODO（track未設定）は "video" 扱いとして移行不要。
+  const TRACKS = [
+    { id: "video", label: "動画視聴" },
+    { id: "example", label: "例題" },
+    { id: "training", label: "トレーニング" },
+  ];
 
   // When category changes: pick first group (material cat) and a sensible active subject
   useEffect(() => {
@@ -2953,7 +2961,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     setSubjectTodos(ts => [...ts, {
       id: genId(), subjectId: activeSubject,
       text: newTodo, minutes: newTodoMinutes ? +newTodoMinutes : null,
-      status: "unwatched", done: false, createdAt: Date.now()
+      status: "unwatched", done: false, createdAt: Date.now(),
+      ...(isMaterialCat ? {} : { track: activeTrack }),
     }]);
     setNewTodo("");
     setNewTodoMinutes("");
@@ -2985,6 +2994,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       id: genId(), subjectId: activeSubject,
       text: l.text, minutes: l.minutes,
       status: "unwatched", done: false, createdAt: now + i,
+      ...(isMaterialCat ? {} : { track: activeTrack }),
     }))]);
     setBulkText("");
     setAddTab("single");
@@ -3004,6 +3014,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
           text,
           minutes: tpl.minutes || null,
           status: "unwatched", done: false, createdAt: now + i,
+          ...(isMaterialCat ? {} : { track: activeTrack }),
         });
       });
       if (items.length) setSubjectTodos(ts => [...ts, ...items]);
@@ -3035,6 +3046,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
           text: titlePrefix + text + (tpl.suffix ? " " + tpl.suffix : ""),
           minutes: tpl.minutes || null,
           status: "unwatched", done: false, createdAt: now + (i++),
+          ...(isMaterialCat ? {} : { track: activeTrack }),
         });
         runningNum++;
       }
@@ -3348,7 +3360,9 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const isMaterialMode = activeSubjectData && activeSubjectData.category && activeSubjectData.category !== "CPA勉強";
   const L = isMaterialMode
     ? { unwatched: "未着手", done: "完了", progressLabel: "取り組み:" }
-    : { unwatched: "未視聴", done: "視聴済", progressLabel: "動画:" };
+    : (activeTrack === "video"
+        ? { unwatched: "未視聴", done: "視聴済", progressLabel: "動画:" }
+        : { unwatched: "未着手", done: "完了", progressLabel: "進捗:" });
 
   // Helpers: parent/child relationship via parentId
   const isParent = (t) => !t.parentId;
@@ -3376,7 +3390,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   };
 
   // Top-level (parent) todos for active subject only
-  const parentTodos = subjectTodos.filter(t => t.subjectId === activeSubject && isParent(t));
+  const parentTodos = subjectTodos.filter(t => t.subjectId === activeSubject && isParent(t)
+    && (isMaterialCat || (t.track || "video") === activeTrack));
   const todos = parentTodos
     .filter(t => {
       const st = parentStatusOf(t);
@@ -3705,6 +3720,32 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               </button>
             )}
           </div>
+
+          {/* Track tabs (CPA勉強のみ): 動画視聴 / 例題 / トレーニング */}
+          {!isMaterialCat && (
+            <div style={{ display: "flex", gap: 4, background: C.surfaceUp, padding: 3, borderRadius: 10 }}>
+              {TRACKS.map(tr => {
+                const isActive = activeTrack === tr.id;
+                const cnt = subjectTodos.filter(t => t.subjectId === activeSubject && isParent(t) && (t.track || "video") === tr.id).length;
+                return (
+                  <button key={tr.id} onClick={() => {
+                    setActiveTrack(tr.id);
+                    setExpandedParents([]);
+                    setSelectMode(false);
+                    setSelectedTodos([]);
+                    setChildSelectParent(null);
+                    setSelectedChildren([]);
+                    setAddOpen(false);
+                  }} style={{
+                    flex: 1, padding: "8px 4px", borderRadius: 7, border: "none",
+                    background: isActive ? activeSubjectData.color : "transparent",
+                    color: isActive ? "#fff" : C.textMid,
+                    fontFamily: font, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+                  }}>{tr.label}{cnt > 0 ? ` ${cnt}` : ""}</button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Compact action toolbar: ＋追加 / 複数選択 / ⚡自動分配 */}
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -4115,7 +4156,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                     padding: 0,
                   }}>{selectedTodos.includes(t.id) ? "✓" : ""}</button>
                 ) : (
-                  <button onClick={cycleStatus} title="動画の視聴状況"
+                  <button onClick={cycleStatus} title={activeTrack === "video" ? "動画の視聴状況" : "取り組み状況"}
                     style={{
                     width: 24, height: 24, borderRadius: "50%",
                     border: `2px solid ${stInfo.border}`,
