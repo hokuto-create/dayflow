@@ -1137,6 +1137,52 @@ function mergeRedChart({ subjects, subjectTodos, subjectCategories }) {
   };
 }
 
+// 既存CPAの「テキストの例題」（動画TODOの子）を「例題」タブ（track:"example"）へ移行する。
+// 旧構造: 動画TODO(=TX章, 親) ─ 例題(子)。
+// 新構造: 動画は「動画視聴」タブ、例題は「例題」タブに分離したいので、
+//   動画TODOごとに同名の例題用コンテナ(track:"example")を作り、その子に例題を付け替える。
+// 子は parentId だけ書き換え、理解度(understanding)・復習日(reviewDue)・ステータス等は
+// そのまま保持する。子のidは不変なので、紐づく予定/復習タスクも壊れない。
+// 子が例題コンテナ配下へ移った後は「動画トラックの親に子が無い」状態になるため冪等。
+function migrateCpaExampleTrack({ subjectTodos, subjects }) {
+  const cpaSubjectIds = new Set(
+    (subjects || [])
+      .filter(s => (s.category || "CPA勉強") === "CPA勉強")
+      .map(s => s.id)
+  );
+  if (cpaSubjectIds.size === 0) return { subjectTodos, moved: 0 };
+  const isVideoTrack = (t) => !t.track || t.track === "video";
+  const hasChild = new Set(subjectTodos.filter(t => t.parentId).map(t => t.parentId));
+  // 子を持つ「動画トラックのCPA親」= 旧構造のTX章
+  const legacyParents = subjectTodos.filter(t =>
+    !t.parentId && isVideoTrack(t) && cpaSubjectIds.has(t.subjectId) && hasChild.has(t.id)
+  );
+  if (legacyParents.length === 0) return { subjectTodos, moved: 0 };
+
+  const remap = new Map(); // 旧親id -> 新・例題コンテナid
+  const newParents = [];
+  legacyParents.forEach(p => {
+    const newId = genId();
+    remap.set(p.id, newId);
+    // 例題コンテナは入れ物。動画の分数や視聴ステータスは引き継がない（minutesは子から集計）。
+    newParents.push({
+      id: newId, subjectId: p.subjectId, text: p.text,
+      minutes: null, status: "unwatched", done: false,
+      track: "example", createdAt: p.createdAt,
+    });
+  });
+  let moved = 0;
+  // 旧親の「直接の子」のみ付け替える。孫以下は子idを参照しているため自動的に追従する。
+  const out = subjectTodos.map(t => {
+    if (t.parentId && remap.has(t.parentId)) {
+      moved++;
+      return { ...t, parentId: remap.get(t.parentId) };
+    }
+    return t;
+  });
+  return { subjectTodos: [...out, ...newParents], moved };
+}
+
 /* ── SHARED STYLES ── */
 const card = (extra = {}) => ({
   background: C.surface,
@@ -2866,6 +2912,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [editTodoMinutes, setEditTodoMinutes] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [filter, setFilter] = useState("all"); // all | active | done
+  // CPA勉強の教材タブ（動画視聴 / 例題 / トレーニング）。素材カテゴリでは使わない。
+  const [activeTrack, setActiveTrack] = useState("video"); // "video" | "example" | "training"
   const [monthPickerTodo, setMonthPickerTodo] = useState(null);
   const [editSubjectId, setEditSubjectId] = useState(null);
   const [editSubjectName, setEditSubjectName] = useState("");
@@ -2891,6 +2939,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [autoDistInterleave, setAutoDistInterleave] = useState(false);
 
   const COLORS = [C.blue, C.green, C.accent, C.purple, C.red, C.yellow];
+  // CPA勉強の教材種別タブ。既存TODO（track未設定）は "video" 扱いとして移行不要。
+  const TRACKS = [
+    { id: "video", label: "動画視聴" },
+    { id: "example", label: "例題" },
+    { id: "training", label: "トレーニング" },
+  ];
 
   // When category changes: pick first group (material cat) and a sensible active subject
   useEffect(() => {
@@ -2953,7 +3007,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     setSubjectTodos(ts => [...ts, {
       id: genId(), subjectId: activeSubject,
       text: newTodo, minutes: newTodoMinutes ? +newTodoMinutes : null,
-      status: "unwatched", done: false, createdAt: Date.now()
+      status: "unwatched", done: false, createdAt: Date.now(),
+      ...(isMaterialCat ? {} : { track: activeTrack }),
     }]);
     setNewTodo("");
     setNewTodoMinutes("");
@@ -2985,6 +3040,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       id: genId(), subjectId: activeSubject,
       text: l.text, minutes: l.minutes,
       status: "unwatched", done: false, createdAt: now + i,
+      ...(isMaterialCat ? {} : { track: activeTrack }),
     }))]);
     setBulkText("");
     setAddTab("single");
@@ -3004,6 +3060,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
           text,
           minutes: tpl.minutes || null,
           status: "unwatched", done: false, createdAt: now + i,
+          ...(isMaterialCat ? {} : { track: activeTrack }),
         });
       });
       if (items.length) setSubjectTodos(ts => [...ts, ...items]);
@@ -3035,6 +3092,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
           text: titlePrefix + text + (tpl.suffix ? " " + tpl.suffix : ""),
           minutes: tpl.minutes || null,
           status: "unwatched", done: false, createdAt: now + (i++),
+          ...(isMaterialCat ? {} : { track: activeTrack }),
         });
         runningNum++;
       }
@@ -3348,7 +3406,9 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const isMaterialMode = activeSubjectData && activeSubjectData.category && activeSubjectData.category !== "CPA勉強";
   const L = isMaterialMode
     ? { unwatched: "未着手", done: "完了", progressLabel: "取り組み:" }
-    : { unwatched: "未視聴", done: "視聴済", progressLabel: "動画:" };
+    : (activeTrack === "video"
+        ? { unwatched: "未視聴", done: "視聴済", progressLabel: "動画:" }
+        : { unwatched: "未着手", done: "完了", progressLabel: "進捗:" });
 
   // Helpers: parent/child relationship via parentId
   const isParent = (t) => !t.parentId;
@@ -3376,7 +3436,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   };
 
   // Top-level (parent) todos for active subject only
-  const parentTodos = subjectTodos.filter(t => t.subjectId === activeSubject && isParent(t));
+  const parentTodos = subjectTodos.filter(t => t.subjectId === activeSubject && isParent(t)
+    && (isMaterialCat || (t.track || "video") === activeTrack));
   const todos = parentTodos
     .filter(t => {
       const st = parentStatusOf(t);
@@ -3705,6 +3766,32 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               </button>
             )}
           </div>
+
+          {/* Track tabs (CPA勉強のみ): 動画視聴 / 例題 / トレーニング */}
+          {!isMaterialCat && (
+            <div style={{ display: "flex", gap: 4, background: C.surfaceUp, padding: 3, borderRadius: 10 }}>
+              {TRACKS.map(tr => {
+                const isActive = activeTrack === tr.id;
+                const cnt = subjectTodos.filter(t => t.subjectId === activeSubject && isParent(t) && (t.track || "video") === tr.id).length;
+                return (
+                  <button key={tr.id} onClick={() => {
+                    setActiveTrack(tr.id);
+                    setExpandedParents([]);
+                    setSelectMode(false);
+                    setSelectedTodos([]);
+                    setChildSelectParent(null);
+                    setSelectedChildren([]);
+                    setAddOpen(false);
+                  }} style={{
+                    flex: 1, padding: "8px 4px", borderRadius: 7, border: "none",
+                    background: isActive ? activeSubjectData.color : "transparent",
+                    color: isActive ? "#fff" : C.textMid,
+                    fontFamily: font, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+                  }}>{tr.label}{cnt > 0 ? ` ${cnt}` : ""}</button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Compact action toolbar: ＋追加 / 複数選択 / ⚡自動分配 */}
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -4115,7 +4202,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                     padding: 0,
                   }}>{selectedTodos.includes(t.id) ? "✓" : ""}</button>
                 ) : (
-                  <button onClick={cycleStatus} title="動画の視聴状況"
+                  <button onClick={cycleStatus} title={activeTrack === "video" ? "動画の視聴状況" : "取り組み状況"}
                     style={{
                     width: 24, height: 24, borderRadius: "50%",
                     border: `2px solid ${stInfo.border}`,
@@ -6148,6 +6235,19 @@ function App() {
       return toAdd.length ? [...prev, ...toAdd] : prev;
     });
     setSubjectCategories(prev => (prev || []).includes("趣味勉強") ? prev : [...(prev || []), "趣味勉強"]);
+  }, [syncEmail, syncStatus]);
+
+  // 既存CPAの例題（動画TODOの子）を「例題」タブへ一度だけ移行する。
+  // 赤チャート移行と同様、メール設定済みなら初回クラウド取得の完了後に実行する。
+  const cpaExMigratedRef = useRef(false);
+  useEffect(() => {
+    if (cpaExMigratedRef.current) return;
+    if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
+    cpaExMigratedRef.current = true;
+    setSubjectTodos(prev => {
+      const r = migrateCpaExampleTrack({ subjectTodos: prev, subjects });
+      return r.moved ? r.subjectTodos : prev;
+    });
   }, [syncEmail, syncStatus]);
 
   // Pull from cloud on initial load if email is set
