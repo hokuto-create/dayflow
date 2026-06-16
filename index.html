@@ -1394,7 +1394,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
     const r = srApply(cur, solved, base);
     const done = r.understanding >= 4;
     // Mark task done + record mark
-    setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true, understanding: r.understanding } : t));
+    setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString(), understanding: r.understanding } : t));
     // Sync subject TODO with ladder state
     if (task.subjectTodoId) {
       setSubjectTodos(sts => sts.map(s => s.id === task.subjectTodoId
@@ -1479,12 +1479,12 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const toggleDone = (task) => {
     // If unchecking, just uncheck
     if (task.done) {
-      setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: false } : t));
+      setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: false, doneAt: null } : t));
       return;
     }
     // If non-study, just check
     if (task.kind === "other") {
-      setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true } : t));
+      setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString() } : t));
       return;
     }
     // Open understanding modal
@@ -2488,7 +2488,11 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
           {done.map(t => (
             <div key={t.id} style={{ padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 13, color: C.textMid, display: "flex", gap: 8 }}>
               <span style={{ color: C.green }}>✓</span> {t.title}
-              <span style={{ marginLeft: "auto", fontSize: 11, color: C.textDim }}>{fmtTime(t.hour)}〜{fmtTime(t.hour + t.duration)}</span>
+              <span style={{ marginLeft: "auto", fontSize: 11, color: C.textDim }}>
+                {t.doneAt
+                  ? new Date(t.doneAt).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) + " 完了"
+                  : `${fmtTime(t.hour)}〜${fmtTime(t.hour + t.duration)}`}
+              </span>
             </div>
           ))}
         </div>
