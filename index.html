@@ -2523,6 +2523,9 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
           {done.map(t => (
             <div key={t.id} style={{ padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 13, color: C.textMid, display: "flex", gap: 8 }}>
               <span style={{ color: C.green }}>✓</span> {t.title}
+              {t.timeSpent != null && (
+                <span style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>⏱ {t.timeSpent}分</span>
+              )}
               <span style={{ marginLeft: "auto", fontSize: 11, color: C.textDim }}>
                 {t.doneAt
                   ? new Date(t.doneAt).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) + " 完了"
@@ -2986,6 +2989,9 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const [editTodoText, setEditTodoText] = useState("");
   const [editTodoMinutes, setEditTodoMinutes] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null);
+  // TODOの「解けた/解けなかった」を押したとき、かかった時間を入力するモーダル。
+  const [resultModal, setResultModal] = useState(null); // { id, solved } or null
+  const [resultMinutes, setResultMinutes] = useState("");
   const [filter, setFilter] = useState("all"); // all | active | done
   // CPA勉強の教材タブ（動画視聴 / 例題 / トレーニング）。素材カテゴリでは使わない。
   const [activeTrack, setActiveTrack] = useState("video"); // "video" | "example" | "training"
@@ -3181,14 +3187,35 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   };
 
   // 間隔反復ラダー: 解けた/解けなかったでマークを1段進め、次回復習日を設定する。
-  const recordResult = (id, solved) => {
+  // minutes（任意）が渡されたら、その日の振り返り（完了タスク）にも かかった時間付きで反映する。
+  const recordResult = (id, solved, minutes) => {
     const base = todayStr();
+    const todo = subjectTodos.find(t => t.id === id);
     setSubjectTodos(ts => ts.map(t => {
       if (t.id !== id) return t;
       const r = srApply(t.understanding, solved, base);
       const done = r.understanding >= 4; // ◎=復習不要=完了扱い
       return { ...t, understanding: r.understanding, reviewDue: r.reviewDue, status: done ? "done" : "reviewing", done };
     }));
+    // 振り返りの「完了」に表示されるよう、当日のタスクとして記録する。
+    // 既に当日その論点のタスクがあれば完了＋時間を上書きし、無ければ完了タスクを新規作成する。
+    if (todo) {
+      const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
+      const stamp = new Date().toISOString();
+      setTasks(ts => {
+        const existing = ts.find(t => t.subjectTodoId === id && t.date === base);
+        if (existing) {
+          return ts.map(t => t.id === existing.id
+            ? { ...t, done: true, doneAt: stamp, timeSpent: spent } : t);
+        }
+        return [...ts, {
+          id: genId(), date: base, title: taskTitleFor(todo),
+          hour: null, duration: todoDuration(todo), priority: "medium",
+          actual: null, done: true, doneAt: stamp, timeSpent: spent, note: "",
+          goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: id,
+        }];
+      });
+    }
   };
   // マークを直接指定する手動上書き（同じマーク再タップで解除）。
   const setUnderstanding = (id, level) => {
@@ -4214,11 +4241,11 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                             {overdue && <span style={{ color: C.red, marginLeft: 4 }}>● 期限超過</span>}
                           </div>
                         </div>
-                        <button onClick={() => recordResult(item.id, true)}
+                        <button onClick={() => { setResultMinutes(""); setResultModal({ id: item.id, solved: true }); }}
                           style={{ padding: "4px 10px", borderRadius: 6, background: C.green,
                             border: `1px solid ${C.green}`, color: "#fff", fontSize: 11, fontWeight: 700,
                             cursor: "pointer", lineHeight: 1, fontFamily: font, flexShrink: 0 }}>解けた</button>
-                        <button onClick={() => recordResult(item.id, false)}
+                        <button onClick={() => { setResultMinutes(""); setResultModal({ id: item.id, solved: false }); }}
                           style={{ padding: "4px 10px", borderRadius: 6, background: "transparent",
                             border: `1px solid ${C.red}`, color: C.red, fontSize: 11, fontWeight: 700,
                             cursor: "pointer", lineHeight: 1, fontFamily: font, flexShrink: 0 }}>解けない</button>
@@ -4601,14 +4628,14 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                         {/* 間隔反復ラダー: 解けた/解けなかった（◎=復習不要の項目は非表示） */}
                         {editTodoId !== c.id && childSelectParent !== t.id && c.understanding !== 4 && (
                           <div style={{ display: "flex", gap: 6, marginTop: 6, marginLeft: 36, alignItems: "center" }}>
-                            <button onClick={() => recordResult(c.id, true)}
+                            <button onClick={() => { setResultMinutes(""); setResultModal({ id: c.id, solved: true }); }}
                               style={{
                                 padding: "4px 12px", borderRadius: 6,
                                 background: C.green, border: `1px solid ${C.green}`,
                                 color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
                                 lineHeight: 1, fontFamily: font,
                               }}>解けた</button>
-                            <button onClick={() => recordResult(c.id, false)}
+                            <button onClick={() => { setResultMinutes(""); setResultModal({ id: c.id, solved: false }); }}
                               style={{
                                 padding: "4px 12px", borderRadius: 6,
                                 background: "transparent", border: `1px solid ${C.red}`,
@@ -4896,6 +4923,96 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               </div>
               <button onClick={() => setMonthPickerTodo(null)}
                 style={{ ...btn(false, C.textMid, { width: "100%", padding: "9px", marginTop: 12 }) }}>閉じる</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 解けた/解けなかった の結果記録モーダル（かかった時間も入力）。
+          DayViewの完了モーダルと同じ要領で、結果を選びつつ かかった時間を記録する。 */}
+      {resultModal && (() => {
+        const todo = subjectTodos.find(t => t.id === resultModal.id);
+        if (!todo) return null;
+        const subj = subjects.find(s => s.id === todo.subjectId);
+        const cur = todo.understanding || 0;
+        const curInfo = SR_MARK[cur];
+        const CHOICES = [
+          { solved: true,  label: "解けた",       mark: SR_MARK[srApply(cur, true, todayStr()).understanding], color: C.green, icon: "○" },
+          { solved: false, label: "解けなかった", mark: SR_MARK[srApply(cur, false, todayStr()).understanding], color: C.red, icon: "✕" },
+        ];
+        const submit = () => {
+          recordResult(resultModal.id, resultModal.solved, resultMinutes);
+          setResultModal(null);
+          setResultMinutes("");
+        };
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+          }} onClick={() => { setResultModal(null); setResultMinutes(""); }}>
+            <div style={{ ...card({ maxWidth: 380, width: "100%" }) }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 4 }}>結果を記録</div>
+              <div style={{ fontSize: 14, color: C.text, marginBottom: 4 }}>{todo.text}</div>
+              <div style={{ fontSize: 11, color: C.textMid, marginBottom: 14 }}>
+                {subj && <span style={{ color: subj.color }}>📚 {subj.name}　</span>}
+                現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}
+              </div>
+              {/* 結果（解けた/解けなかった）— 切り替え可能 */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                {CHOICES.map(ch => {
+                  const active = resultModal.solved === ch.solved;
+                  return (
+                    <button key={ch.label} onClick={() => setResultModal(m => ({ ...m, solved: ch.solved }))}
+                      style={{
+                        flex: 1, display: "flex", alignItems: "center", gap: 8,
+                        padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontFamily: font,
+                        background: active ? ch.color : C.surfaceUp,
+                        border: `1px solid ${active ? ch.color : ch.color + "55"}`,
+                      }}>
+                      <span style={{
+                        width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                        background: active ? "#fff" : ch.color, color: active ? ch.color : "#fff",
+                        fontWeight: 700, fontSize: 14,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>{ch.icon}</span>
+                      <span style={{ textAlign: "left", lineHeight: 1.2 }}>
+                        <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: active ? "#fff" : C.text }}>{ch.label}</span>
+                        <span style={{ display: "block", fontSize: 10, color: active ? "#fff" : C.textMid }}>→ {ch.mark.mark}（{ch.mark.label}）</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {/* かかった時間（分）。任意入力。クイック選択 + 手入力。 */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>
+                  ⏱ かかった時間（分）<span style={{ opacity: 0.7 }}>　任意</span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                  {[1, 3, 5, 10, 15, 30].map(m => {
+                    const on = String(m) === String(resultMinutes);
+                    return (
+                      <button key={m} onClick={() => setResultMinutes(on ? "" : String(m))}
+                        style={{
+                          padding: "5px 10px", borderRadius: 8, fontFamily: font, fontSize: 12, cursor: "pointer",
+                          background: on ? C.accent : C.surfaceUp, color: on ? "#fff" : C.text,
+                          border: `1px solid ${on ? C.accent : C.border}`,
+                        }}>{m}分</button>
+                    );
+                  })}
+                </div>
+                <input type="number" min="0" inputMode="numeric" value={resultMinutes}
+                  onChange={e => setResultMinutes(e.target.value)} placeholder="分を直接入力"
+                  style={{
+                    width: "100%", boxSizing: "border-box", padding: "8px 10px",
+                    borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceUp,
+                    color: C.text, fontFamily: font, fontSize: 13,
+                  }} />
+              </div>
+              <button onClick={submit}
+                style={{ ...btn(true, C.accent, { width: "100%", padding: "10px" }) }}>記録する</button>
+              <button onClick={() => { setResultModal(null); setResultMinutes(""); }}
+                style={{ ...btn(false, C.textMid, { width: "100%", marginTop: 8, padding: "8px" }) }}>キャンセル</button>
             </div>
           </div>
         );
