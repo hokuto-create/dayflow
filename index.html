@@ -3191,31 +3191,39 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
   const recordResult = (id, solved, minutes) => {
     const base = todayStr();
     const todo = subjectTodos.find(t => t.id === id);
-    setSubjectTodos(ts => ts.map(t => {
-      if (t.id !== id) return t;
-      const r = srApply(t.understanding, solved, base);
-      const done = r.understanding >= 4; // ◎=復習不要=完了扱い
-      return { ...t, understanding: r.understanding, reviewDue: r.reviewDue, status: done ? "done" : "reviewing", done };
-    }));
+    if (!todo) return;
+    const r = srApply(todo.understanding, solved, base);
+    const done = r.understanding >= 4; // ◎=復習不要=完了扱い
+    setSubjectTodos(ts => ts.map(t => t.id === id
+      ? { ...t, understanding: r.understanding, reviewDue: r.reviewDue, status: done ? "done" : "reviewing", done }
+      : t));
     // 振り返りの「完了」に表示されるよう、当日のタスクとして記録する。
     // 既に当日その論点のタスクがあれば完了＋時間を上書きし、無ければ完了タスクを新規作成する。
-    if (todo) {
-      const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
-      const stamp = new Date().toISOString();
-      setTasks(ts => {
-        const existing = ts.find(t => t.subjectTodoId === id && t.date === base);
-        if (existing) {
-          return ts.map(t => t.id === existing.id
-            ? { ...t, done: true, doneAt: stamp, timeSpent: spent } : t);
-        }
-        return [...ts, {
-          id: genId(), date: base, title: taskTitleFor(todo),
-          hour: null, duration: todoDuration(todo), priority: "medium",
-          actual: null, done: true, doneAt: stamp, timeSpent: spent, note: "",
-          goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: id,
-        }];
-      });
-    }
+    // ◎（復習不要）に達していなければ、DayView側の completeWithUnderstanding と同様に
+    // 次回復習日のタスクもスケジュールへ追加する。
+    const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
+    const stamp = new Date().toISOString();
+    setTasks(ts => {
+      const existing = ts.find(t => t.subjectTodoId === id && t.date === base);
+      const taskId = existing ? existing.id : genId();
+      const next = existing
+        ? ts.map(t => t.id === existing.id ? { ...t, done: true, doneAt: stamp, timeSpent: spent } : t)
+        : [...ts, {
+            id: taskId, date: base, title: taskTitleFor(todo),
+            hour: null, duration: todoDuration(todo), priority: "medium",
+            actual: null, done: true, doneAt: stamp, timeSpent: spent, note: "",
+            goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: id,
+          }];
+      if (!r.reviewDue) return next;
+      return [...next, {
+        id: genId(), date: r.reviewDue, title: `復習: ${taskTitleFor(todo)}`,
+        hour: null, duration: todoDuration(todo),
+        priority: r.understanding === 1 ? "high" : r.understanding === 2 ? "medium" : "low",
+        actual: null, done: false, note: "",
+        goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: id,
+        isReview: true, reviewOf: taskId,
+      }];
+    });
   };
   // マークを直接指定する手動上書き（同じマーク再タップで解除）。
   const setUnderstanding = (id, level) => {
