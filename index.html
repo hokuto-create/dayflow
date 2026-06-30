@@ -1598,6 +1598,62 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         );
       })()}
 
+      {/* Overdue (non-review) tasks from previous days — lets you bulk-carry stale
+          tasks forward instead of working through the day-by-day 振り返り cascade. */}
+      {(() => {
+        const today = todayStr();
+        if (selectedDate !== today) return null;
+        const isOverdue = t => !t.isReview && !t.done && t.date < today;
+        const overdueTasks = tasks.filter(isOverdue);
+        if (overdueTasks.length === 0) return null;
+        const carryAllToday = () => setTasks(ts => ts.map(t => isOverdue(t) ? { ...t, date: today, hour: null } : t));
+        return (
+          <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff0eb", borderColor: C.red + "60" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.red }}>
+                ⏳ 過去の未完了タスク（{overdueTasks.length}件）
+              </div>
+              <button onClick={carryAllToday} style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>
+                すべて今日に繰り越す
+              </button>
+            </div>
+            {overdueTasks.slice(0, 5).map(t => {
+              const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
+              const daysLate = Math.floor((new Date(today) - new Date(t.date)) / 86400000);
+              return (
+                <div key={t.id} style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "6px 8px", borderRadius: 6,
+                  background: C.surface, border: `1px solid ${C.border}`,
+                  marginBottom: 6,
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, color: C.text, fontWeight: 500,
+                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+                    }}>{abbrevTitle(t.title)}</div>
+                    <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
+                      {daysLate}日遅れ
+                      {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
+                    </div>
+                  </div>
+                  <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null } : x))}
+                    style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>今日に</button>
+                  <button onClick={() => askDeleteTask(t.id)}
+                    style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
+                    {confirmDeleteTask === t.id ? "削除" : "✕"}
+                  </button>
+                </div>
+              );
+            })}
+            {overdueTasks.length > 5 && (
+              <div style={{ fontSize: 10, color: C.textMid, textAlign: "center", marginTop: 4 }}>
+                他 {overdueTasks.length - 5} 件
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Unscheduled tasks */}
       {unscheduledTasks.length > 0 && (
         <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff8ec", borderColor: C.yellow + "60" }}>
