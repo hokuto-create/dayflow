@@ -1319,6 +1319,8 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [overdueReviewSubjectFilter, setOverdueReviewSubjectFilter] = useState(null);
   const [confirmBulkDeleteReview, setConfirmBulkDeleteReview] = useState(false);
   const [confirmDedupReview, setConfirmDedupReview] = useState(false);
+  const [unscheduledSubjectFilter, setUnscheduledSubjectFilter] = useState(null);
+  useEffect(() => { setUnscheduledSubjectFilter(null); }, [selectedDate]);
   const askDeleteTask = (id) => {
     if (confirmDeleteTask === id) {
       deleteTask(id);
@@ -1954,12 +1956,44 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       })()}
 
       {/* Unscheduled tasks */}
-      {unscheduledTasks.length > 0 && (
+      {unscheduledTasks.length > 0 && (() => {
+        const subjectIds = [...new Set(unscheduledTasks.map(t => t.subjectId).filter(Boolean))];
+        const availableSubjects = subjectIds.map(id => subjects.find(s => s.id === id)).filter(Boolean);
+        const noSubjCount = unscheduledTasks.filter(t => !t.subjectId).length;
+        const filteredUnscheduled = unscheduledSubjectFilter
+          ? unscheduledSubjectFilter === "__none__"
+            ? unscheduledTasks.filter(t => !t.subjectId)
+            : unscheduledTasks.filter(t => t.subjectId === unscheduledSubjectFilter)
+          : unscheduledTasks;
+        return (
         <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff8ec", borderColor: C.yellow + "60" }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.yellow, marginBottom: 8 }}>
             ⏱ 未スケジュール（{unscheduledTasks.length}件）— タップで時間を割り振る
           </div>
-          {unscheduledTasks.map(t => {
+          {availableSubjects.length > 0 && (
+            <div style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 8 }}>
+              <button onClick={() => setUnscheduledSubjectFilter(null)}
+                style={{ ...btn(!unscheduledSubjectFilter, C.accent, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>
+                すべて ({unscheduledTasks.length})
+              </button>
+              {availableSubjects.map(s => {
+                const cnt = unscheduledTasks.filter(t => t.subjectId === s.id).length;
+                return (
+                  <button key={s.id} onClick={() => setUnscheduledSubjectFilter(unscheduledSubjectFilter === s.id ? null : s.id)}
+                    style={{ ...btn(unscheduledSubjectFilter === s.id, s.color, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>
+                    {s.name} ({cnt})
+                  </button>
+                );
+              })}
+              {noSubjCount > 0 && (
+                <button onClick={() => setUnscheduledSubjectFilter(unscheduledSubjectFilter === "__none__" ? null : "__none__")}
+                  style={{ ...btn(unscheduledSubjectFilter === "__none__", C.textMid, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>
+                  科目なし ({noSubjCount})
+                </button>
+              )}
+            </div>
+          )}
+          {filteredUnscheduled.map(t => {
             const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
             const txLabel = reviewTxLabel(t);
             const PREFIX = "復習: ";
@@ -2000,7 +2034,8 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
             );
           })}
         </div>
-      )}
+        );
+      })()}
 
       {/* Timeline */}
       <div style={{ ...card(), marginBottom: 12, padding: 0, overflow: "hidden", position: "relative" }}>
