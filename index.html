@@ -1311,6 +1311,9 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [examplesModal, setExamplesModal] = useState(null); // task whose examples (children) to show
   const [confirmDeleteTask, setConfirmDeleteTask] = useState(null);
   const [durationEditId, setDurationEditId] = useState(null);
+  const [showAllOverdue, setShowAllOverdue] = useState(false);
+  const [overdueSubjectFilter, setOverdueSubjectFilter] = useState(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const askDeleteTask = (id) => {
     if (confirmDeleteTask === id) {
       deleteTask(id);
@@ -1646,10 +1649,131 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               );
             })}
             {overdueTasks.length > 5 && (
-              <div style={{ fontSize: 10, color: C.textMid, textAlign: "center", marginTop: 4 }}>
-                他 {overdueTasks.length - 5} 件
+              <div onClick={() => setShowAllOverdue(true)} style={{ fontSize: 10, color: C.accent, textAlign: "center", marginTop: 4, cursor: "pointer", fontWeight: 600 }}>
+                他 {overdueTasks.length - 5} 件を表示 →
               </div>
             )}
+          </div>
+        );
+      })()}
+
+      {/* All overdue tasks modal */}
+      {showAllOverdue && (() => {
+        const today = todayStr();
+        const allOverdue = tasks.filter(t => !t.isReview && !t.done && t.date < today)
+          .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+        const subjectIds = [...new Set(allOverdue.map(t => t.subjectId).filter(Boolean))];
+        const availableSubjects = subjectIds.map(id => subjects.find(s => s.id === id)).filter(Boolean);
+        const filtered = overdueSubjectFilter
+          ? overdueSubjectFilter === "__none__"
+            ? allOverdue.filter(t => !t.subjectId)
+            : allOverdue.filter(t => t.subjectId === overdueSubjectFilter)
+          : allOverdue;
+        const carryFiltered = () => {
+          const ids = new Set(filtered.map(t => t.id));
+          setTasks(ts => ts.map(t => ids.has(t.id) ? { ...t, date: today, hour: null } : t));
+        };
+        const deleteFiltered = () => {
+          if (!confirmBulkDelete) { setConfirmBulkDelete(true); setTimeout(() => setConfirmBulkDelete(false), 3000); return; }
+          const ids = new Set(filtered.map(t => t.id));
+          setTasks(ts => ts.filter(t => !ids.has(t.id)));
+          setConfirmBulkDelete(false);
+          setShowAllOverdue(false);
+        };
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", flexDirection: "column",
+          }} onClick={() => { setShowAllOverdue(false); setOverdueSubjectFilter(null); setConfirmBulkDelete(false); }}>
+            <div style={{
+              background: C.bg, flex: 1, display: "flex", flexDirection: "column",
+              maxWidth: 480, width: "100%", margin: "0 auto",
+              overflow: "hidden",
+            }} onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div style={{ padding: "14px 16px 10px", background: C.surface, borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: C.red }}>
+                    ⏳ 過去の未完了タスク（{allOverdue.length}件）
+                  </div>
+                  <button onClick={() => { setShowAllOverdue(false); setOverdueSubjectFilter(null); setConfirmBulkDelete(false); }}
+                    style={{ ...btn(false, C.textMid, { fontSize: 14, padding: "4px 10px" }) }}>閉じる</button>
+                </div>
+                {/* Subject filter */}
+                <div style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 4 }}>
+                  <button onClick={() => setOverdueSubjectFilter(null)}
+                    style={{ ...btn(!overdueSubjectFilter, C.accent, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>
+                    すべて ({allOverdue.length})
+                  </button>
+                  {availableSubjects.map(s => {
+                    const cnt = allOverdue.filter(t => t.subjectId === s.id).length;
+                    return (
+                      <button key={s.id} onClick={() => setOverdueSubjectFilter(overdueSubjectFilter === s.id ? null : s.id)}
+                        style={{ ...btn(overdueSubjectFilter === s.id, s.color, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>
+                        {s.name} ({cnt})
+                      </button>
+                    );
+                  })}
+                  {(() => {
+                    const noSubjCount = allOverdue.filter(t => !t.subjectId).length;
+                    if (noSubjCount === 0) return null;
+                    return (
+                      <button onClick={() => setOverdueSubjectFilter(overdueSubjectFilter === "__none__" ? null : "__none__")}
+                        style={{ ...btn(overdueSubjectFilter === "__none__", C.textMid, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>
+                        科目なし ({noSubjCount})
+                      </button>
+                    );
+                  })()}
+                </div>
+                {/* Bulk actions */}
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button onClick={carryFiltered}
+                    style={{ ...btn(false, C.accent, { fontSize: 10, padding: "4px 10px", flex: 1 }) }}>
+                    {overdueSubjectFilter ? `${filtered.length}件を今日に` : "すべて今日に繰り越す"}
+                  </button>
+                  <button onClick={deleteFiltered}
+                    style={{ ...btn(confirmBulkDelete, C.red, { fontSize: 10, padding: "4px 10px", flex: 1 }) }}>
+                    {confirmBulkDelete ? `${filtered.length}件を本当に削除` : `${filtered.length}件を削除`}
+                  </button>
+                </div>
+              </div>
+              {/* Task list */}
+              <div style={{ flex: 1, overflowY: "auto", padding: "8px 12px" }}>
+                {filtered.map(t => {
+                  const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
+                  const daysLate = Math.floor((new Date(today) - new Date(t.date)) / 86400000);
+                  return (
+                    <div key={t.id} style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "6px 8px", borderRadius: 6,
+                      background: C.surface, border: `1px solid ${C.border}`,
+                      marginBottom: 4,
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: C.text, fontWeight: 500,
+                          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+                        }}>{abbrevTitle(t.title)}</div>
+                        <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
+                          {daysLate}日遅れ · {t.date}
+                          {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
+                        </div>
+                      </div>
+                      <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null } : x))}
+                        style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>今日に</button>
+                      <button onClick={() => askDeleteTask(t.id)}
+                        style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
+                        {confirmDeleteTask === t.id ? "削除" : "✕"}
+                      </button>
+                    </div>
+                  );
+                })}
+                {filtered.length === 0 && (
+                  <div style={{ textAlign: "center", color: C.textMid, fontSize: 12, marginTop: 20 }}>
+                    該当するタスクはありません
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         );
       })()}
