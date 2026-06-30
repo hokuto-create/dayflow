@@ -1315,6 +1315,10 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [overdueSubjectFilter, setOverdueSubjectFilter] = useState(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [confirmDedup, setConfirmDedup] = useState(false);
+  const [showAllOverdueReviews, setShowAllOverdueReviews] = useState(false);
+  const [overdueReviewSubjectFilter, setOverdueReviewSubjectFilter] = useState(null);
+  const [confirmBulkDeleteReview, setConfirmBulkDeleteReview] = useState(false);
+  const [confirmDedupReview, setConfirmDedupReview] = useState(false);
   const askDeleteTask = (id) => {
     if (confirmDeleteTask === id) {
       deleteTask(id);
@@ -1594,10 +1598,151 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               );
             })}
             {overdueReviews.length > 5 && (
-              <div style={{ fontSize: 10, color: C.textMid, textAlign: "center", marginTop: 4 }}>
-                他 {overdueReviews.length - 5} 件
+              <div onClick={() => setShowAllOverdueReviews(true)} style={{ fontSize: 10, color: C.accent, textAlign: "center", marginTop: 4, cursor: "pointer", fontWeight: 600 }}>
+                他 {overdueReviews.length - 5} 件を表示 →
               </div>
             )}
+          </div>
+        );
+      })()}
+
+      {/* All overdue reviews modal */}
+      {showAllOverdueReviews && (() => {
+        const today = todayStr();
+        const allOverdueR = tasks.filter(t => t.isReview && !t.done && t.date < today)
+          .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+        const subjectIds = [...new Set(allOverdueR.map(t => t.subjectId).filter(Boolean))];
+        const availableSubjects = subjectIds.map(id => subjects.find(s => s.id === id)).filter(Boolean);
+        const filtered = overdueReviewSubjectFilter
+          ? overdueReviewSubjectFilter === "__none__"
+            ? allOverdueR.filter(t => !t.subjectId)
+            : allOverdueR.filter(t => t.subjectId === overdueReviewSubjectFilter)
+          : allOverdueR;
+        const carryFiltered = () => {
+          const ids = new Set(filtered.map(t => t.id));
+          setTasks(ts => ts.map(t => ids.has(t.id) ? { ...t, date: today, hour: null } : t));
+        };
+        const deleteFiltered = () => {
+          if (!confirmBulkDeleteReview) { setConfirmBulkDeleteReview(true); setTimeout(() => setConfirmBulkDeleteReview(false), 3000); return; }
+          const ids = new Set(filtered.map(t => t.id));
+          setTasks(ts => ts.filter(t => !ids.has(t.id)));
+          setConfirmBulkDeleteReview(false);
+          setShowAllOverdueReviews(false);
+        };
+        const closeModal = () => { setShowAllOverdueReviews(false); setOverdueReviewSubjectFilter(null); setConfirmBulkDeleteReview(false); setConfirmDedupReview(false); };
+        return (
+          <div style={{
+            position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+            display: "flex", flexDirection: "column",
+          }} onClick={closeModal}>
+            <div style={{
+              background: C.bg, flex: 1, display: "flex", flexDirection: "column",
+              maxWidth: 480, width: "100%", margin: "0 auto",
+              overflow: "hidden",
+            }} onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div style={{ padding: "14px 16px 10px", background: C.surface, borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: C.red }}>
+                    🔁 期限超過の復習（{allOverdueR.length}件）
+                  </div>
+                  <button onClick={closeModal}
+                    style={{ ...btn(false, C.textMid, { fontSize: 14, padding: "4px 10px" }) }}>閉じる</button>
+                </div>
+                {/* Subject filter */}
+                <div style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 4 }}>
+                  <button onClick={() => setOverdueReviewSubjectFilter(null)}
+                    style={{ ...btn(!overdueReviewSubjectFilter, C.accent, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>
+                    すべて ({allOverdueR.length})
+                  </button>
+                  {availableSubjects.map(s => {
+                    const cnt = allOverdueR.filter(t => t.subjectId === s.id).length;
+                    return (
+                      <button key={s.id} onClick={() => setOverdueReviewSubjectFilter(overdueReviewSubjectFilter === s.id ? null : s.id)}
+                        style={{ ...btn(overdueReviewSubjectFilter === s.id, s.color, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>
+                        {s.name} ({cnt})
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* Bulk actions */}
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button onClick={carryFiltered}
+                    style={{ ...btn(false, C.accent, { fontSize: 10, padding: "4px 10px", flex: 1 }) }}>
+                    {overdueReviewSubjectFilter ? `${filtered.length}件を今日に` : "すべて今日に繰り越す"}
+                  </button>
+                  <button onClick={deleteFiltered}
+                    style={{ ...btn(confirmBulkDeleteReview, C.red, { fontSize: 10, padding: "4px 10px", flex: 1 }) }}>
+                    {confirmBulkDeleteReview ? `${filtered.length}件を本当に削除` : `${filtered.length}件を削除`}
+                  </button>
+                </div>
+                {/* Dedup */}
+                {(() => {
+                  const groups = {};
+                  filtered.forEach(t => {
+                    const key = (t.title || "") + "|||" + (t.subjectId || "");
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(t);
+                  });
+                  const dupIds = new Set();
+                  Object.values(groups).forEach(g => {
+                    if (g.length <= 1) return;
+                    g.sort((a, b) => a.date > b.date ? -1 : a.date < b.date ? 1 : 0);
+                    g.slice(1).forEach(t => dupIds.add(t.id));
+                  });
+                  if (dupIds.size === 0) return null;
+                  const removeDups = () => {
+                    if (!confirmDedupReview) { setConfirmDedupReview(true); setTimeout(() => setConfirmDedupReview(false), 3000); return; }
+                    setTasks(ts => ts.filter(t => !dupIds.has(t.id)));
+                    setConfirmDedupReview(false);
+                  };
+                  return (
+                    <div style={{ marginTop: 6 }}>
+                      <button onClick={removeDups}
+                        style={{ ...btn(confirmDedupReview, "#e67e22", { fontSize: 10, padding: "4px 10px", width: "100%" }) }}>
+                        {confirmDedupReview ? `${dupIds.size}件の重複を本当に削除（各タイトル最新1件を残す）` : `重複をまとめて削除（${dupIds.size}件）`}
+                      </button>
+                    </div>
+                  );
+                })()}
+              </div>
+              {/* Review list */}
+              <div style={{ flex: 1, overflowY: "auto", padding: "8px 12px" }}>
+                {filtered.map(t => {
+                  const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
+                  const daysLate = Math.floor((new Date(today) - new Date(t.date)) / 86400000);
+                  return (
+                    <div key={t.id} style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "6px 8px", borderRadius: 6,
+                      background: C.surface, border: `1px solid ${C.border}`,
+                      marginBottom: 4,
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: C.text, fontWeight: 500,
+                          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+                        }}>{abbrevTitle(t.title)}</div>
+                        <div style={{ fontSize: 10, color: C.textMid, marginTop: 1 }}>
+                          {daysLate}日遅れ · {t.date}
+                          {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
+                        </div>
+                      </div>
+                      <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null } : x))}
+                        style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>今日に</button>
+                      <button onClick={() => askDeleteTask(t.id)}
+                        style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
+                        {confirmDeleteTask === t.id ? "削除" : "✕"}
+                      </button>
+                    </div>
+                  );
+                })}
+                {filtered.length === 0 && (
+                  <div style={{ textAlign: "center", color: C.textMid, fontSize: 12, marginTop: 20 }}>
+                    該当する復習はありません
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         );
       })()}
