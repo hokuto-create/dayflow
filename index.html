@@ -1314,6 +1314,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [showAllOverdue, setShowAllOverdue] = useState(false);
   const [overdueSubjectFilter, setOverdueSubjectFilter] = useState(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [confirmDedup, setConfirmDedup] = useState(false);
   const askDeleteTask = (id) => {
     if (confirmDeleteTask === id) {
       deleteTask(id);
@@ -1684,7 +1685,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           <div style={{
             position: "fixed", inset: 0, background: "#0008", zIndex: 100,
             display: "flex", flexDirection: "column",
-          }} onClick={() => { setShowAllOverdue(false); setOverdueSubjectFilter(null); setConfirmBulkDelete(false); }}>
+          }} onClick={() => { setShowAllOverdue(false); setOverdueSubjectFilter(null); setConfirmBulkDelete(false); setConfirmDedup(false); }}>
             <div style={{
               background: C.bg, flex: 1, display: "flex", flexDirection: "column",
               maxWidth: 480, width: "100%", margin: "0 auto",
@@ -1696,7 +1697,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   <div style={{ fontSize: 15, fontWeight: 700, color: C.red }}>
                     ⏳ 過去の未完了タスク（{allOverdue.length}件）
                   </div>
-                  <button onClick={() => { setShowAllOverdue(false); setOverdueSubjectFilter(null); setConfirmBulkDelete(false); }}
+                  <button onClick={() => { setShowAllOverdue(false); setOverdueSubjectFilter(null); setConfirmBulkDelete(false); setConfirmDedup(false); }}
                     style={{ ...btn(false, C.textMid, { fontSize: 14, padding: "4px 10px" }) }}>閉じる</button>
                 </div>
                 {/* Subject filter */}
@@ -1736,6 +1737,35 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                     {confirmBulkDelete ? `${filtered.length}件を本当に削除` : `${filtered.length}件を削除`}
                   </button>
                 </div>
+                {/* Dedup */}
+                {(() => {
+                  const groups = {};
+                  filtered.forEach(t => {
+                    const key = (t.title || "") + "|||" + (t.subjectId || "");
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(t);
+                  });
+                  const dupIds = new Set();
+                  Object.values(groups).forEach(g => {
+                    if (g.length <= 1) return;
+                    g.sort((a, b) => a.date > b.date ? -1 : a.date < b.date ? 1 : 0);
+                    g.slice(1).forEach(t => dupIds.add(t.id));
+                  });
+                  if (dupIds.size === 0) return null;
+                  const removeDups = () => {
+                    if (!confirmDedup) { setConfirmDedup(true); setTimeout(() => setConfirmDedup(false), 3000); return; }
+                    setTasks(ts => ts.filter(t => !dupIds.has(t.id)));
+                    setConfirmDedup(false);
+                  };
+                  return (
+                    <div style={{ marginTop: 6 }}>
+                      <button onClick={removeDups}
+                        style={{ ...btn(confirmDedup, "#e67e22", { fontSize: 10, padding: "4px 10px", width: "100%" }) }}>
+                        {confirmDedup ? `${dupIds.size}件の重複を本当に削除（各タイトル最新1件を残す）` : `重複をまとめて削除（${dupIds.size}件）`}
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
               {/* Task list */}
               <div style={{ flex: 1, overflowY: "auto", padding: "8px 12px" }}>
