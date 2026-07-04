@@ -1417,8 +1417,13 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
     const done = r.understanding >= 4;
     // かかった時間（分）。空欄・不正値は記録しない（null）。
     const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
-    // Mark task done + record mark + timeSpent
-    setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString(), understanding: r.understanding, timeSpent: spent } : t));
+    // Mark task done + record mark + timeSpent.
+    // Also remove other pending tasks for the same TODO (stale auto-distributed or
+    // review tasks that are no longer needed now that the understanding level changed).
+    setTasks(ts => ts
+      .map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString(), understanding: r.understanding, timeSpent: spent } : t)
+      .filter(t => t.id === task.id || !(t.subjectTodoId && t.subjectTodoId === task.subjectTodoId && !t.done))
+    );
     // Sync subject TODO with ladder state
     if (task.subjectTodoId) {
       setSubjectTodos(sts => sts.map(s => s.id === task.subjectTodoId
@@ -3616,7 +3621,10 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     setTasks(ts => {
       const existing = ts.find(t => t.subjectTodoId === id && t.date === base);
       const taskId = existing ? existing.id : genId();
-      const next = existing
+      // Mark today's task done (or create one), then remove other pending tasks
+      // for the same TODO — stale auto-distributed / old review tasks are obsolete
+      // now that a new review date (or mastery) has been determined.
+      let next = existing
         ? ts.map(t => t.id === existing.id ? { ...t, done: true, doneAt: stamp, timeSpent: spent } : t)
         : [...ts, {
             id: taskId, date: base, title: taskTitleFor(todo),
@@ -3624,6 +3632,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
             actual: null, done: true, doneAt: stamp, timeSpent: spent, note: "",
             goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: id,
           }];
+      next = next.filter(t => t.id === taskId || !(t.subjectTodoId === id && !t.done));
       if (!r.reviewDue) return next;
       return [...next, {
         id: genId(), date: r.reviewDue, title: `復習: ${taskTitleFor(todo)}`,
