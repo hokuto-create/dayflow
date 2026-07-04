@@ -182,12 +182,25 @@ function compactReviewTitle(title) {
 
 function extractProblemNumber(title) {
   const s = (title || "").replace(/赤チャート数学/g, "赤茶");
-  const m = s.match(/(?:例題|練習|問題|問|Q|演習問題)\s*(\d+)/);
-  if (m) return parseInt(m[1], 10);
+  const typeOrder = [
+    [/例題\s*(\d+)/, 0],
+    [/練習\s*(\d+)/, 1],
+    [/演習問題\s*(\d+)/, 2],
+    [/類題\s*(\d+)/, 4],
+    [/試練\s*(\d+)/, 6],
+    [/主題\s*(\d+)/, 5],
+    [/問題\s*(\d+)/, 3],
+  ];
+  for (const [re, pri] of typeOrder) {
+    const m = s.match(re);
+    if (m) return pri * 100000 + parseInt(m[1], 10);
+  }
+  const m = s.match(/(?:問|Q)\s*(\d+)/);
+  if (m) return 7 * 100000 + parseInt(m[1], 10);
   const tx = s.match(/[Tt][Xx](\d+)[-−](\d+)/);
-  if (tx) return parseInt(tx[1], 10) * 1000 + parseInt(tx[2], 10);
+  if (tx) return 8 * 100000 + parseInt(tx[1], 10) * 1000 + parseInt(tx[2], 10);
   const num = s.match(/(\d+)/);
-  return num ? parseInt(num[1], 10) : Infinity;
+  return num ? 9 * 100000 + parseInt(num[1], 10) : Infinity;
 }
 
 // Active study days in [startStr, endStr] whose weekday is in `weekdays` (a Set
@@ -1392,7 +1405,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       // Bulk add: main date + extraDates
       const dates = [form.date, ...extraDates].filter((d, i, a) => a.indexOf(d) === i);
       const { date: _d, ...rest } = form;
-      const newTasks = dates.map(d => ({ id: genId(), done: false, actual: null, ...rest, date: d }));
+      const newTasks = dates.map(d => ({ id: genId(), done: false, actual: null, ...rest, date: d, originalDate: d }));
       setTasks(ts => [...ts, ...newTasks]);
     }
     setForm({ title: "", date: selectedDate, hour: 9, duration: 1, priority: "medium", note: "", goalId: "", kind: "study" });
@@ -1448,7 +1461,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         priority: r.understanding === 1 ? "high" : r.understanding === 2 ? "medium" : "low",
         actual: null, done: false, note: "", goalId: task.goalId,
         kind: "study", subjectId: task.subjectId, subjectTodoId: task.subjectTodoId,
-        isReview: true, reviewOf: task.id,
+        isReview: true, reviewOf: task.id, originalDate: reviewDate,
       }]);
     }
     // 赤チャートの例題が◎(完璧)に到達したら、対応する「練習」を2週間後に開始する。
@@ -1480,7 +1493,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           hour: null, duration: practiceDur, priority: "medium",
           actual: null, done: false, note: "", goalId: task.goalId,
           kind: "study", subjectId: ex.subjectId, subjectTodoId: practiceId,
-          isPractice: true,
+          isPractice: true, originalDate: addDays(base, PRACTICE_DELAY_DAYS),
         }]);
       }
     }
@@ -1606,7 +1619,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                       {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
                     </div>
                   </div>
-                  <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null } : x))}
+                  <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null, originalDate: x.originalDate || x.date } : x))}
                     style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>今日に</button>
                   <button onClick={() => askDeleteTask(t.id)}
                     style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
@@ -1638,7 +1651,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           : allOverdueR;
         const carryFiltered = () => {
           const ids = new Set(filtered.map(t => t.id));
-          setTasks(ts => ts.map(t => ids.has(t.id) ? { ...t, date: today, hour: null } : t));
+          setTasks(ts => ts.map(t => ids.has(t.id) ? { ...t, date: today, hour: null, originalDate: t.originalDate || t.date } : t));
         };
         const deleteFiltered = () => {
           if (!confirmBulkDeleteReview) { setConfirmBulkDeleteReview(true); setTimeout(() => setConfirmBulkDeleteReview(false), 3000); return; }
@@ -1745,7 +1758,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                           {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
                         </div>
                       </div>
-                      <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null } : x))}
+                      <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null, originalDate: x.originalDate || x.date } : x))}
                         style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>今日に</button>
                       <button onClick={() => askDeleteTask(t.id)}
                         style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
@@ -1773,7 +1786,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         const isOverdue = t => !t.isReview && !t.done && t.date < today;
         const overdueTasks = tasks.filter(isOverdue);
         if (overdueTasks.length === 0) return null;
-        const carryAllToday = () => setTasks(ts => ts.map(t => isOverdue(t) ? { ...t, date: today, hour: null } : t));
+        const carryAllToday = () => setTasks(ts => ts.map(t => isOverdue(t) ? { ...t, date: today, hour: null, originalDate: t.originalDate || t.date } : t));
         return (
           <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff0eb", borderColor: C.red + "60" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
@@ -1803,7 +1816,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                       {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
                     </div>
                   </div>
-                  <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null } : x))}
+                  <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null, originalDate: x.originalDate || x.date } : x))}
                     style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>今日に</button>
                   <button onClick={() => askDeleteTask(t.id)}
                     style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
@@ -1835,7 +1848,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           : allOverdue;
         const carryFiltered = () => {
           const ids = new Set(filtered.map(t => t.id));
-          setTasks(ts => ts.map(t => ids.has(t.id) ? { ...t, date: today, hour: null } : t));
+          setTasks(ts => ts.map(t => ids.has(t.id) ? { ...t, date: today, hour: null, originalDate: t.originalDate || t.date } : t));
         };
         const deleteFiltered = () => {
           if (!confirmBulkDelete) { setConfirmBulkDelete(true); setTimeout(() => setConfirmBulkDelete(false), 3000); return; }
@@ -1951,7 +1964,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                           {subjData && <span style={{ color: subjData.color, marginLeft: 6 }}>📚 {subjData.name}</span>}
                         </div>
                       </div>
-                      <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null } : x))}
+                      <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, date: today, hour: null, originalDate: x.originalDate || x.date } : x))}
                         style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>今日に</button>
                       <button onClick={() => askDeleteTask(t.id)}
                         style={{ ...btn(confirmDeleteTask === t.id, C.red, { fontSize: 10, padding: "3px 6px" }) }}>
@@ -1983,7 +1996,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           : unscheduledTasks;
         const filteredUnscheduled = unscheduledSort === "number"
           ? [...filteredBase].sort((a, b) => extractProblemNumber(a.title) - extractProblemNumber(b.title))
-          : filteredBase;
+          : [...filteredBase].sort((a, b) => (a.originalDate || a.date || "").localeCompare(b.originalDate || b.date || ""));
         return (
         <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff8ec", borderColor: C.yellow + "60" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
@@ -2852,7 +2865,7 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
       if (!t || t.carriedOver) return ts;
       return [
         ...ts.map(x => x.id === taskId ? { ...x, carriedOver: true } : x),
-        { ...t, id: genId(), date: tomorrow, hour: null, done: false, actual: null, carriedOver: false },
+        { ...t, id: genId(), date: tomorrow, hour: null, done: false, actual: null, carriedOver: false, originalDate: t.originalDate || t.date },
       ];
     });
   };
@@ -3631,6 +3644,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
             hour: null, duration: todoDuration(todo), priority: "medium",
             actual: null, done: true, doneAt: stamp, timeSpent: spent, note: "",
             goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: id,
+            originalDate: base,
           }];
       next = next.filter(t => t.id === taskId || !(t.subjectTodoId === id && !t.done));
       if (!r.reviewDue) return next;
@@ -3640,7 +3654,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         priority: r.understanding === 1 ? "high" : r.understanding === 2 ? "medium" : "low",
         actual: null, done: false, note: "",
         goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: id,
-        isReview: true, reviewOf: taskId,
+        isReview: true, reviewOf: taskId, originalDate: r.reviewDue,
       }];
     });
   };
@@ -3720,6 +3734,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       hour: null, duration: dur, priority: "medium",
       actual: null, done: false, note: "",
       goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
+      originalDate: selectedDate,
     }]);
     if (!inWeekly(todo.id)) sendToWeekly(todo);
   };
@@ -3847,6 +3862,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       hour: null, duration: p.dur ?? todoDuration(p.todo), priority: "medium",
       actual: null, done: false, note: "", goalId: null,
       kind: "study", subjectId: p.todo.subjectId, subjectTodoId: p.todo.id,
+      originalDate: p.date,
     }));
     setTasks(ts => [
       ...ts.filter(t => !(scopeIds.has(t.subjectTodoId) && isReplaceablePlanTask(t))),
@@ -5989,6 +6005,7 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                         hour: null, duration: dur, priority: "medium",
                         actual: null, done: false, note: "",
                         goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: todo.id,
+                        originalDate: d,
                       }]);
                     }} style={{
                       padding: "10px 14px", borderRadius: 8,
@@ -6052,6 +6069,7 @@ function WeekView({ tasks, setTasks, selectedDate, setSelectedDate, weeklyPlans,
                             id: genId(), date: d, title,
                             hour: null, duration: dur, priority: "mid",
                             goalId: null, kind: "study", subjectId: t.subjectId, subjectTodoId: t.id,
+                            originalDate: d,
                           });
                         }
                       });
