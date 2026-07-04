@@ -180,6 +180,16 @@ function compactReviewTitle(title) {
   return lead ? `${m[2]} ${lead}` : m[2];
 }
 
+function extractProblemNumber(title) {
+  const s = (title || "").replace(/赤チャート数学/g, "赤茶");
+  const m = s.match(/(?:例題|練習|問題|問|Q|演習問題)\s*(\d+)/);
+  if (m) return parseInt(m[1], 10);
+  const tx = s.match(/[Tt][Xx](\d+)[-−](\d+)/);
+  if (tx) return parseInt(tx[1], 10) * 1000 + parseInt(tx[2], 10);
+  const num = s.match(/(\d+)/);
+  return num ? parseInt(num[1], 10) : Infinity;
+}
+
 // Active study days in [startStr, endStr] whose weekday is in `weekdays` (a Set
 // of 0=Sun..6=Sat). Used by deadline-mode auto-distribution.
 function activeDaysBetween(startStr, endStr, weekdays) {
@@ -1320,6 +1330,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [confirmBulkDeleteReview, setConfirmBulkDeleteReview] = useState(false);
   const [confirmDedupReview, setConfirmDedupReview] = useState(false);
   const [unscheduledSubjectFilter, setUnscheduledSubjectFilter] = useState(null);
+  const [unscheduledSort, setUnscheduledSort] = useState("default"); // "default" | "number"
   useEffect(() => { setUnscheduledSubjectFilter(null); }, [selectedDate]);
   const askDeleteTask = (id) => {
     if (confirmDeleteTask === id) {
@@ -1960,15 +1971,24 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         const subjectIds = [...new Set(unscheduledTasks.map(t => t.subjectId).filter(Boolean))];
         const availableSubjects = subjectIds.map(id => subjects.find(s => s.id === id)).filter(Boolean);
         const noSubjCount = unscheduledTasks.filter(t => !t.subjectId).length;
-        const filteredUnscheduled = unscheduledSubjectFilter
+        const filteredBase = unscheduledSubjectFilter
           ? unscheduledSubjectFilter === "__none__"
             ? unscheduledTasks.filter(t => !t.subjectId)
             : unscheduledTasks.filter(t => t.subjectId === unscheduledSubjectFilter)
           : unscheduledTasks;
+        const filteredUnscheduled = unscheduledSort === "number"
+          ? [...filteredBase].sort((a, b) => extractProblemNumber(a.title) - extractProblemNumber(b.title))
+          : filteredBase;
         return (
         <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff8ec", borderColor: C.yellow + "60" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.yellow, marginBottom: 8 }}>
-            ⏱ 未スケジュール（{unscheduledTasks.length}件）— タップで時間を割り振る
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.yellow }}>
+              ⏱ 未スケジュール（{unscheduledTasks.length}件）— タップで時間を割り振る
+            </div>
+            <button onClick={() => setUnscheduledSort(s => s === "default" ? "number" : "default")}
+              style={{ ...btn(unscheduledSort === "number", C.yellow, { fontSize: 10, padding: "2px 7px", whiteSpace: "nowrap" }) }}>
+              {unscheduledSort === "number" ? "番号順 ↑" : "番号順"}
+            </button>
           </div>
           {availableSubjects.length > 0 && (
             <div style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 8 }}>
