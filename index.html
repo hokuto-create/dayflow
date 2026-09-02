@@ -362,7 +362,7 @@ function resyncPlanMarkers(placements, setMonthlyPlans, setWeeklyPlans) {
   });
 }
 
-/* ── 1日1題（赤チャート） ── */
+/* ── 1日1題（赤チャート・教材ごと） ── */
 // 赤チャート（趣味勉強>高校数学、subjectId が rc_ で始まる）のタスクか。
 function isRedChartTask(t) { return !!(t.subjectId && String(t.subjectId).startsWith("rc_")); }
 
@@ -377,13 +377,18 @@ function isMovableRcTask(t, today) {
   return isRedChartTask(t) && !t.done && t.date >= today && !t.isReview && t.hour == null && !!t.subjectTodoId;
 }
 
-// 1日1題の調整（純関数・state変更なし）。赤チャート全体で1日に置く問題を1つにする。
-// 復習など固定タスクのある日には例題を置かず、例題・練習は日付順を保ったまま
+// 1日1題の調整（純関数・state変更なし）。教材（subject）ごとに1日に置く問題を1つにする
+// （数学Ⅰで1題、数学Aで1題…と、教材が違えば同じ日に並んでよい）。
+// 復習など固定タスクのある日には同じ教材の例題を置かず、例題・練習は日付順を保ったまま
 // 次の空き日へずらす（前倒しはしない）。同じ日に複数あれば練習→例題の順に先へ送る。
 // 返り値は [{ taskId, newDate }]。一度適用すると再実行しても移動が出ない（冪等）ので、
 // 起動時やデータ変更のたびに安全に回せる。
 function planOneProblemPerDay(tasks, today) {
-  const occupied = new Set(tasks.filter(t => isFixedRcTask(t, today)).map(t => t.date));
+  // 教材ごとの「埋まっている日」と、チェーンの進み位置（前の問題の翌日）。
+  const occupiedBy = new Map();
+  const occupiedOf = (sid) => { if (!occupiedBy.has(sid)) occupiedBy.set(sid, new Set()); return occupiedBy.get(sid); };
+  tasks.filter(t => isFixedRcTask(t, today)).forEach(t => occupiedOf(t.subjectId).add(t.date));
+  const cursorBy = new Map();
   const movable = tasks
     .map((t, i) => ({ t, i }))
     .filter(x => isMovableRcTask(x.t, today))
@@ -396,14 +401,15 @@ function planOneProblemPerDay(tasks, today) {
     })
     .map(x => x.t);
   const moves = [];
-  let cursor = today;
   for (const t of movable) {
+    const occupied = occupiedOf(t.subjectId);
+    const cursor = cursorBy.get(t.subjectId) || today;
     let d = t.date > cursor ? t.date : cursor;
     let guard = 0;
     while (occupied.has(d) && guard++ < 3660) d = addDays(d, 1);
     if (d !== t.date) moves.push({ taskId: t.id, newDate: d });
     occupied.add(d);
-    cursor = addDays(d, 1);
+    cursorBy.set(t.subjectId, addDays(d, 1));
   }
   return moves;
 }
@@ -4063,15 +4069,15 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         weekdays: new Set(autoDistWeekdays),
       });
     }
-    // 1日1題: 使う曜日に合う日へ1単位ずつ置く。復習・練習・他の教材の予定など、
-    // この分配で置き換えない赤チャートのタスクがある日は飛ばす（期限・1日あたりは使わない）。
+    // 1日1題: 使う曜日に合う日へ1単位ずつ置く。同じ教材の復習・練習など、
+    // この分配で置き換えないタスクがある日は飛ばす（他の教材は数えない。期限・1日あたりは使わない）。
     const weekdays = new Set(autoDistWeekdays);
     if (weekdays.size === 0 || units.length === 0) return [];
     const today = todayStr();
     const scopeIds = new Set();
     (autoDistIds || []).forEach(id => { scopeIds.add(id); descendantsOf(id).forEach(d => scopeIds.add(d.id)); });
     const occupied = new Set(tasks
-      .filter(t => isRedChartTask(t) && !t.done && t.date >= today && !(scopeIds.has(t.subjectTodoId) && isReplaceablePlanTask(t)))
+      .filter(t => t.subjectId === activeSubject && !t.done && t.date >= today && !(scopeIds.has(t.subjectTodoId) && isReplaceablePlanTask(t)))
       .map(t => t.date));
     const out = [];
     let d = autoDistStart || today, guard = 0;
@@ -7258,7 +7264,7 @@ function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, set
             <span style={{ flex: 1 }}>
               <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>1日1題にする</span>
               <span style={{ display: "block", fontSize: 10, color: C.textDim, marginTop: 1 }}>
-                復習や練習がある日には例題を置かず、次の空き日へずらします。自動分配も1日1問ずつ置きます（赤チャート全体で1日1題）。
+                教材ごとに1日1題（数学Ⅰで1題、Aで1題…）。復習や練習がある日には同じ教材の例題を置かず、次の空き日へずらします。自動分配も1日1問ずつ置きます。
               </span>
             </span>
           </button>
@@ -7520,7 +7526,7 @@ function App() {
     setRecoveryUndo(null);
   };
 
-  // 1日1題（赤チャート）: 復習などで埋まった日の例題・練習を次の空き日へずらす。
+  // 1日1題（赤チャート・教材ごと）: 復習などで埋まった日の例題・練習を次の空き日へずらす。
   // タスクが変わるたびに走るが、調整済みなら移動が出ないので setTasks は呼ばれない。
   const oneProblemPerDay = settings.oneProblemPerDay ?? true;
   useEffect(() => {
