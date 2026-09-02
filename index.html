@@ -362,6 +362,52 @@ function resyncPlanMarkers(placements, setMonthlyPlans, setWeeklyPlans) {
   });
 }
 
+/* ── 1日1題（赤チャート） ── */
+// 赤チャート（趣味勉強>高校数学、subjectId が rc_ で始まる）のタスクか。
+function isRedChartTask(t) { return !!(t.subjectId && String(t.subjectId).startsWith("rc_")); }
+
+// 今日以降の赤チャートで「その日が埋まっている」扱いにする固定タスク:
+// 復習（間隔反復で日付が決まる）と、時刻を指定して手で置いたもの。
+function isFixedRcTask(t, today) {
+  return isRedChartTask(t) && !t.done && t.date >= today && (t.isReview || t.hour != null);
+}
+// 1日1題のルールでずらせる赤チャートのタスク: 今日以降・未完了・復習でない・時刻未指定の
+// 教材プラン（例題・演習）と、まだ始めていない練習。
+function isMovableRcTask(t, today) {
+  return isRedChartTask(t) && !t.done && t.date >= today && !t.isReview && t.hour == null && !!t.subjectTodoId;
+}
+
+// 1日1題の調整（純関数・state変更なし）。赤チャート全体で1日に置く問題を1つにする。
+// 復習など固定タスクのある日には例題を置かず、例題・練習は日付順を保ったまま
+// 次の空き日へずらす（前倒しはしない）。同じ日に複数あれば練習→例題の順に先へ送る。
+// 返り値は [{ taskId, newDate }]。一度適用すると再実行しても移動が出ない（冪等）ので、
+// 起動時やデータ変更のたびに安全に回せる。
+function planOneProblemPerDay(tasks, today) {
+  const occupied = new Set(tasks.filter(t => isFixedRcTask(t, today)).map(t => t.date));
+  const movable = tasks
+    .map((t, i) => ({ t, i }))
+    .filter(x => isMovableRcTask(x.t, today))
+    .sort((a, b) => {
+      if (a.t.date !== b.t.date) return a.t.date < b.t.date ? -1 : 1;
+      if (!!a.t.isPractice !== !!b.t.isPractice) return a.t.isPractice ? -1 : 1;
+      const ao = a.t.originalDate || "", bo = b.t.originalDate || "";
+      if (ao !== bo) return ao < bo ? -1 : 1;
+      return a.i - b.i;
+    })
+    .map(x => x.t);
+  const moves = [];
+  let cursor = today;
+  for (const t of movable) {
+    let d = t.date > cursor ? t.date : cursor;
+    let guard = 0;
+    while (occupied.has(d) && guard++ < 3660) d = addDays(d, 1);
+    if (d !== t.date) moves.push({ taskId: t.id, newDate: d });
+    occupied.add(d);
+    cursor = addDays(d, 1);
+  }
+  return moves;
+}
+
 /* ── INITIAL DATA ── */
 const SAMPLE_GOALS = [
   { id: "g1", title: "公認会計士 短答合格", color: C.blue, deadline: "2026-12-01", note: "2026年12月 短答式試験合格" },
@@ -4003,14 +4049,39 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     return units;
   };
 
+  // 1日1題（赤チャート）が有効か。有効なら自動分配は時間ではなく「1日1単位」で置く。
+  const onePerDayActive = (settings?.oneProblemPerDay ?? true) && !!activeSubject && String(activeSubject).startsWith("rc_");
+
   // Greedy placement of units onto days. Returns [{ todo, dur, date }].
-  const computeAutoPlacements = (units) => packUnitsOntoDays(units, {
-    mode: autoDistMode,
-    start: autoDistStart || todayStr(),
-    deadline: autoDistDeadline,
-    hoursPerDay: parseFloat(autoDistHours) || 0,
-    weekdays: new Set(autoDistWeekdays),
-  });
+  const computeAutoPlacements = (units) => {
+    if (!onePerDayActive) {
+      return packUnitsOntoDays(units, {
+        mode: autoDistMode,
+        start: autoDistStart || todayStr(),
+        deadline: autoDistDeadline,
+        hoursPerDay: parseFloat(autoDistHours) || 0,
+        weekdays: new Set(autoDistWeekdays),
+      });
+    }
+    // 1日1題: 使う曜日に合う日へ1単位ずつ置く。復習・練習・他の教材の予定など、
+    // この分配で置き換えない赤チャートのタスクがある日は飛ばす（期限・1日あたりは使わない）。
+    const weekdays = new Set(autoDistWeekdays);
+    if (weekdays.size === 0 || units.length === 0) return [];
+    const today = todayStr();
+    const scopeIds = new Set();
+    (autoDistIds || []).forEach(id => { scopeIds.add(id); descendantsOf(id).forEach(d => scopeIds.add(d.id)); });
+    const occupied = new Set(tasks
+      .filter(t => isRedChartTask(t) && !t.done && t.date >= today && !(scopeIds.has(t.subjectTodoId) && isReplaceablePlanTask(t)))
+      .map(t => t.date));
+    const out = [];
+    let d = autoDistStart || today, guard = 0;
+    for (const u of units) {
+      while (guard++ < 3660 && (!weekdays.has(new Date(d + "T00:00:00").getDay()) || occupied.has(d))) d = addDays(d, 1);
+      out.push({ ...u, date: d });
+      d = addDays(d, 1);
+    }
+    return out;
+  };
 
   const runAutoDistribute = () => {
     const units = autoDistUnits();
@@ -5713,7 +5784,8 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               </div>
 
               <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
-                {/* Mode toggle */}
+                {/* Mode toggle（1日1題が有効な赤チャートでは使わないので隠す） */}
+                {!onePerDayActive && (
                 <div style={{ display: "flex", gap: 6 }}>
                   <button onClick={() => setAutoDistMode("deadline")}
                     style={{ ...btn(autoDistMode === "deadline", subjColor, { flex: 1, fontSize: 12, padding: "8px" }) }}>
@@ -5724,6 +5796,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                     ⏱ 1日あたり
                   </button>
                 </div>
+                )}
 
                 {/* Start date */}
                 <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textMid }}>
@@ -5733,7 +5806,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                     style={{ ...input({ flex: 1, fontSize: 13, padding: "7px 10px" }) }} />
                 </label>
 
-                {autoDistMode === "deadline" ? (
+                {onePerDayActive ? null : autoDistMode === "deadline" ? (
                   <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textMid }}>
                     <span style={{ width: 64 }}>期限</span>
                     <input type="date" value={autoDistDeadline} min={autoDistStart}
@@ -5804,9 +5877,16 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   ) : (
                     <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
                       <div><b>{units.length}</b> 単位を <b>{dayCount}</b> 日に分配</div>
-                      {autoDistMode === "deadline"
-                        ? <div>1日平均 約 <b>{(totalH / Math.max(1, dayCount)).toFixed(1)}h</b></div>
-                        : <div>終了予定 <b>{lastDate ? fmtMD(lastDate) : "–"}</b></div>}
+                      {onePerDayActive
+                        ? <div>📐 1日1題ずつ ・ 終了予定 <b>{lastDate ? fmtMD(lastDate) : "–"}</b></div>
+                        : autoDistMode === "deadline"
+                          ? <div>1日平均 約 <b>{(totalH / Math.max(1, dayCount)).toFixed(1)}h</b></div>
+                          : <div>終了予定 <b>{lastDate ? fmtMD(lastDate) : "–"}</b></div>}
+                      {onePerDayActive && (
+                        <div style={{ color: C.textMid, fontSize: 11, marginTop: 2 }}>
+                          1日1題が有効なため、復習や練習がある日は飛ばして1問ずつ置きます（⚙設定で変更可）
+                        </div>
+                      )}
                       {replaceCount > 0 && (
                         <div style={{ color: C.red, marginTop: 4 }}>
                           ⚠️ 既存の先の予定 <b>{replaceCount}</b> 件を置き換えます
@@ -7029,7 +7109,7 @@ function RecoveryModal({ tasks, setTasks, subjects, goals, settings, monthlyPlan
 }
 
 function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, setSyncEmail, syncStatus, lastSyncedAt, manualPull }) {
-  const [local, setLocal] = useState({ dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true, recoveryThresholdHours: 6, ...settings });
+  const [local, setLocal] = useState({ dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true, recoveryThresholdHours: 6, oneProblemPerDay: true, ...settings });
   const [localEmail, setLocalEmail] = useState(syncEmail || "");
   const [confirmReset, setConfirmReset] = useState(false);
   const statusMap = {
@@ -7159,6 +7239,31 @@ function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, set
           )}
         </div>
 
+        {/* 1日1題（赤チャート） */}
+        <div style={{ marginBottom: 14, padding: 12, background: C.surfaceUp, borderRadius: 8, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 12, color: C.textMid, marginBottom: 6, fontWeight: 700 }}>📐 赤チャートの進め方</div>
+          <button onClick={() => setLocal(s => ({ ...s, oneProblemPerDay: !(s.oneProblemPerDay ?? true) }))}
+            style={{
+              display: "flex", alignItems: "center", gap: 8, width: "100%",
+              padding: "8px 10px", borderRadius: 6, cursor: "pointer",
+              background: C.surface, border: `1px solid ${C.border}`, fontFamily: font, textAlign: "left",
+            }}>
+            <span style={{
+              width: 18, height: 18, borderRadius: 4, flexShrink: 0,
+              border: `2px solid ${(local.oneProblemPerDay ?? true) ? C.accent : C.border}`,
+              background: (local.oneProblemPerDay ?? true) ? C.accent : "transparent",
+              color: "#fff", fontSize: 12, fontWeight: 700,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>{(local.oneProblemPerDay ?? true) ? "✓" : ""}</span>
+            <span style={{ flex: 1 }}>
+              <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>1日1題にする</span>
+              <span style={{ display: "block", fontSize: 10, color: C.textDim, marginTop: 1 }}>
+                復習や練習がある日には例題を置かず、次の空き日へずらします。自動分配も1日1問ずつ置きます（赤チャート全体で1日1題）。
+              </span>
+            </span>
+          </button>
+        </div>
+
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
           <button onClick={() => { setSettings(local); setSyncEmail(localEmail.trim()); onClose(); }}
             style={{ ...btn(true, C.accent, { flex: 1, padding: "9px" }) }}>保存</button>
@@ -7270,7 +7375,7 @@ function App() {
   const [monthlyPlans, setMonthlyPlans] = usePersistedState("monthlyPlans", []);
   const [weeklyPlans, setWeeklyPlans] = usePersistedState("weeklyPlans", []);
   const [reviews, setReviews] = usePersistedState("reviews", {}); // 日付ごとの振り返り記録（完了フラグ含む）
-  const [settings, setSettings] = usePersistedState("settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true, recoveryThresholdHours: 6 });
+  const [settings, setSettings] = usePersistedState("settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true, recoveryThresholdHours: 6, oneProblemPerDay: true });
   const [syncEmail, setSyncEmail] = usePersistedState("syncEmail", "");
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error
   const [lastSyncedAt, setLastSyncedAt] = useState(0);
@@ -7414,6 +7519,23 @@ function App() {
     setWeeklyPlans(recoveryUndo.weeklyPlans);
     setRecoveryUndo(null);
   };
+
+  // 1日1題（赤チャート）: 復習などで埋まった日の例題・練習を次の空き日へずらす。
+  // タスクが変わるたびに走るが、調整済みなら移動が出ないので setTasks は呼ばれない。
+  const oneProblemPerDay = settings.oneProblemPerDay ?? true;
+  useEffect(() => {
+    if (!oneProblemPerDay) return;
+    if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
+    const moves = planOneProblemPerDay(tasks, todayStr());
+    if (moves.length === 0) return;
+    const moveMap = new Map(moves.map(m => [m.taskId, m.newDate]));
+    setTasks(ts => ts.map(t => moveMap.has(t.id) ? { ...t, date: moveMap.get(t.id) } : t));
+    resyncPlanMarkers(
+      tasks.filter(t => moveMap.has(t.id) && t.subjectTodoId)
+        .map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: moveMap.get(t.id) })),
+      setMonthlyPlans, setWeeklyPlans,
+    );
+  }, [tasks, oneProblemPerDay, syncEmail, syncStatus]);
 
   const resetAll = () => {
     const keysToRemove = [];
