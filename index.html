@@ -460,17 +460,19 @@ function planOneProblemPerDay(tasks, today) {
    ・done: 受講済みの回数（先頭から。日程表でピンクに塗った回）
    ・jitsu: 「実」の回の番号（番号の枠を1つ使う。例: 8→実→10 なら 9）
    ・extra: 番号の後ろに続く回（財計入門の「補講」など）
-   ・dl: 受講期限 [[この回まで, 期限日], ...]（オレンジ線=11月末、緑線=12月末）
+   ・dl: 受講期限 [[この回まで, 期限日], ...]（オレンジ線=11月末、緑線=12月末。財計は期限を設けない）
    ・daily: true の科目は日曜を除き1日1コマずつ、未受講の回を順番に予定へ入れる
-     （startFrom があればその日から。財理・監査論は12月から受け始める） */
+     （startFrom があればその日から。財理・監査論は12月から受け始める）
+   ・fillOnJitsu: startFrom より前は、他の科目が「実」（実力テスト）の日にだけ1コマ受ける
+     （監査論: 11月は他科目の実力テストの日に受ける。実力テスト1回につき1コマ） */
 const CPA_NOV = "2026-11-30", CPA_DEC = "2026-12-31";
 const CPA_LECTURE_SUBJECTS = [
   { id: "s_calc", name: "財計", color: "#d14545", daily: true, sections: [
     { title: "入門", count: 6, jitsu: [6], extra: ["補講"], done: 7 },
-    { title: "基礎マスターⅠ", count: 19, jitsu: [9, 19], done: 1, dl: [[19, CPA_NOV]] },
-    { title: "基礎マスターⅡ", count: 16, jitsu: [9, 16], dl: [[16, CPA_NOV]] },
-    { title: "基礎マスターⅢ", count: 12, jitsu: [12], dl: [[12, CPA_DEC]] },
-    { title: "基礎マスターⅣ", count: 12, jitsu: [12], dl: [[12, CPA_DEC]] },
+    { title: "基礎マスターⅠ", count: 19, jitsu: [9, 19], done: 1 },
+    { title: "基礎マスターⅡ", count: 16, jitsu: [9, 16] },
+    { title: "基礎マスターⅢ", count: 12, jitsu: [12] },
+    { title: "基礎マスターⅣ", count: 12, jitsu: [12] },
     { title: "上級講義", count: 9 },
     { title: "Web補講", count: 3 },
   ] },
@@ -488,12 +490,14 @@ const CPA_LECTURE_SUBJECTS = [
     { title: "入門基礎マスター", count: 20, dl: [[20, CPA_NOV]] },
     { title: "上級講義", count: 12, dl: [[12, CPA_DEC]] },
   ] },
-  { id: "s_audit", name: "監査論", color: "#3aa0d8", daily: true, startFrom: "2026-12-01", sections: [
+  { id: "s_audit", name: "監査論", color: "#3aa0d8", daily: true, startFrom: "2026-12-01", fillOnJitsu: true, sections: [
     { title: "入門", count: 5, dl: [[5, CPA_NOV]] },
     { title: "上級講義", count: 20, dl: [[20, CPA_DEC]] },
   ] },
 ];
 const CPA_LECTURE_MINUTES = 180;
+// 作り直しの版。内容を変えたら上げる（未実行・旧版の端末で一度だけ作り直しが走る）。
+const CPA_REBUILD_VERSION = 2;
 
 // 講義TODO（区分=親、各回=子）を作る。子は isLecture: true（解けた/解けなかったは使わない）。
 function buildCpaLectureTodos() {
@@ -632,17 +636,32 @@ function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date) {
 }
 
 // daily な科目の未受講の回を、start（科目に startFrom があれば遅い方）から
-// 日曜を除いて1日1コマずつ順番に置く。onlyIds を渡すとその科目だけを対象にする。
+// 日曜を除いて1日1コマずつ順番に置く。
 // 返り値: 予定タスクの配列（科目ごとに独立して並べるので、同じ日に複数科目が並ぶ）。
-function scheduleCpaLectures(todos, start, onlyIds) {
+function scheduleCpaLectures(todos, start) {
   const out = [];
-  CPA_LECTURE_SUBJECTS.filter(s => s.daily && (!onlyIds || onlyIds.includes(s.id))).forEach(subj => {
+  CPA_LECTURE_SUBJECTS.filter(s => s.daily).forEach(subj => {
     const parents = todos.filter(t => t.subjectId === subj.id && !t.parentId)
       .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     let d = subj.startFrom && subj.startFrom > start ? subj.startFrom : start;
+    // 開始日より前の「他科目の実力テストの日」（先に並べた科目の予定から拾う。テスト1回につき1枠）
+    const jitsuDays = subj.fillOnJitsu
+      ? out.filter(t => / 実$/.test(t.title) && t.date >= start && t.date < d).map(t => t.date).sort()
+      : [];
     parents.forEach(p => {
       todos.filter(c => c.parentId === p.id && !c.done && c.isLecture)
         .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).forEach(c => {
+        if (jitsuDays.length) {
+          const jd = jitsuDays.shift();
+          out.push({
+            id: genId(), date: jd, title: `${subj.name} ${p.text} ${c.text}`,
+            hour: null, duration: CPA_LECTURE_MINUTES / 60, priority: "medium",
+            actual: null, done: false, note: "", goalId: null,
+            kind: "study", subjectId: subj.id, subjectTodoId: c.id,
+            isLecture: true, originalDate: jd,
+          });
+          return;
+        }
         while (new Date(d + "T00:00:00").getDay() === 0) d = addDays(d, 1);
         out.push({
           id: genId(), date: d, title: `${subj.name} ${p.text} ${c.text}`,
@@ -7869,7 +7888,7 @@ function App() {
     setWeeklyPlans(prev => { const r = run({ weeklyPlans: prev }); return r.weeklyPlans.length !== prev.length ? r.weeklyPlans : prev; });
   }, [syncEmail, syncStatus]);
 
-  // 会計士（CPA勉強）を講義の受講計画で作り直す（一度だけ。settings.cpaLectureRebuild で記録）。
+  // 会計士（CPA勉強）を講義の受講計画で作り直す（一度だけ。settings.cpaLectureRebuild に版を記録）。
   // ・CPA勉強の科目・TODO・未完了タスク・月次/週次マーカーを全て消す（完了済みタスクは振り返り用に残す）
   // ・財計/財理/管理会計/企業法/監査論の講義TODOを入れ、財計・管理会計・企業法は日曜以外1日1コマで予定に入れる
   // メール設定済みなら初回クラウド取得の完了後に実行する（他端末で実行済みならフラグが同期されて再実行しない）。
@@ -7879,7 +7898,7 @@ function App() {
     if (cpaRebuildRef.current) return;
     if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
     cpaRebuildRef.current = true;
-    if (settings.cpaLectureRebuild) return;
+    if ((settings.cpaLectureRebuild || 0) >= CPA_REBUILD_VERSION) return;
     const oldCpaIds = new Set(subjects.filter(sb => (sb.category || "CPA勉強") === "CPA勉強").map(sb => sb.id));
     const cpaIds = new Set([...oldCpaIds, ...CPA_LECTURE_SUBJECTS.map(sb => sb.id)]);
     const lectureTodos = buildCpaLectureTodos();
@@ -7900,39 +7919,7 @@ function App() {
     setWeeklyPlans(prev => prev.filter(p => !cpaIds.has(p.subjectId)));
     resyncPlanMarkers(newTasks.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
       setMonthlyPlans, setWeeklyPlans);
-    setSettings(st => ({ ...st, cpaLectureRebuild: 1, cpaTheoryAuditSchedule: 1, cpaCalcTrainings: 1 }));
-  }, [syncEmail, syncStatus]);
-
-  // 作り直しを先に実行した端末向け: 財理・監査論の講義を12月から1日1コマで予定に入れる（一度だけ）。
-  // 作り直しを今回実行する場合はそちらで予定に入るので、ここでは何もしない。
-  const cpaTaRef = useRef(false);
-  useEffect(() => {
-    if (cpaTaRef.current) return;
-    if (syncEmail && syncStatus !== "synced") return;
-    cpaTaRef.current = true;
-    if (!settings.cpaLectureRebuild || settings.cpaTheoryAuditSchedule) return;
-    const ids = ["s_theory", "s_audit"];
-    const scheduled = new Set(tasks.filter(t => t.subjectTodoId).map(t => t.subjectTodoId));
-    const pending = subjectTodos.filter(t => ids.includes(t.subjectId) && !scheduled.has(t.subjectTodoId) && !scheduled.has(t.id));
-    const newTasks = scheduleCpaLectures(pending, todayStr(), ids);
-    if (newTasks.length) {
-      setTasks(prev => [...prev, ...newTasks]);
-      resyncPlanMarkers(newTasks.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
-        setMonthlyPlans, setWeeklyPlans);
-    }
-    setSettings(st => ({ ...st, cpaTheoryAuditSchedule: 1 }));
-  }, [syncEmail, syncStatus]);
-
-  // 作り直しを先に実行した端末向け: 財計のトレーニング（講義との対応付き）を一度だけ登録する。
-  const cpaTrRef = useRef(false);
-  useEffect(() => {
-    if (cpaTrRef.current) return;
-    if (syncEmail && syncStatus !== "synced") return;
-    cpaTrRef.current = true;
-    if (!settings.cpaLectureRebuild || settings.cpaCalcTrainings) return;
-    setSubjectTodos(prev => prev.some(t => t.subjectId === "s_calc" && t.lectureTodoId)
-      ? prev : [...prev, ...buildCpaTrainingTodos(prev)]);
-    setSettings(st => ({ ...st, cpaCalcTrainings: 1 }));
+    setSettings(st => ({ ...st, cpaLectureRebuild: CPA_REBUILD_VERSION }));
   }, [syncEmail, syncStatus]);
 
   // Pull from cloud on initial load if email is set
