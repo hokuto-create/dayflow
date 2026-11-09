@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261109-7';
+  const APP_VERSION = '20261109-8';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -501,7 +501,7 @@ const CPA_LECTURE_SUBJECTS = [
   ] },
   { id: "s_theory", name: "財理", color: "#3a9d6e", daily: true, startFrom: "2026-12-01", sections: [
     { title: "入門", count: 14, dl: [[14, CPA_DEC]] },
-    { title: "上級講義", count: 22, dl: [[7, CPA_DEC]] },
+    { title: "上級講義", count: 23, dl: [[7, CPA_DEC]] },
   ] },
   { id: "s_mgmt", name: "管理会計", color: "#d4a528", daily: true, sections: [
     { title: "入門", count: 9, jitsu: [9], done: 1, dl: [[9, CPA_NOV]] },
@@ -521,7 +521,30 @@ const CPA_LECTURE_SUBJECTS = [
 const CPA_LECTURE_MINUTES = 180;
 // 作り直しの版。内容を変えたら上げる（未実行・旧版の端末で一度だけ作り直しが走る）。
 // 版3→4 は講義の開始日の変更だけなので、版3の端末は作り直さず講義の予定だけ並べ直す。
-const CPA_REBUILD_VERSION = 4;
+// 版4→5 は財理の上級講義に第23回を足すだけなので、作り直さず足りない回を追加して予定に入れる。
+const CPA_REBUILD_VERSION = 5;
+
+// 作り直し済みのデータに、定義（CPA_LECTURE_SUBJECTS）より足りない講義の回を足す。
+// 区分の親が見つかり、その「第N回」が無いものだけを追加する（冪等）。返り値は追加する講義TODOの配列。
+function missingCpaLectureTodos(todos) {
+  const out = [];
+  CPA_LECTURE_SUBJECTS.forEach(subj => subj.sections.forEach(sec => {
+    const parent = todos.find(t => t.subjectId === subj.id && !t.parentId && (t.track || "video") === "video" && t.text === sec.title);
+    if (!parent) return;
+    const kids = todos.filter(t => t.parentId === parent.id && t.isLecture);
+    const lastSeq = kids.reduce((m, t) => Math.max(m, t.createdAt || 0), parent.createdAt || 0);
+    let add = 0;
+    for (let n = 1; n <= sec.count; n++) {
+      if (kids.some(t => new RegExp(`^第${n}回`).test(t.text))) continue;
+      const dl = ((sec.dl || []).find(([upTo]) => n <= upTo) || [])[1] || null;
+      out.push({ id: genId(), subjectId: subj.id, parentId: parent.id,
+        text: (sec.jitsu || []).includes(n) ? `第${n}回 実` : `第${n}回`,
+        minutes: CPA_LECTURE_MINUTES, status: "unwatched", done: false,
+        track: "video", isLecture: true, deadline: dl, createdAt: lastSeq + 0.001 * (++add) });
+    }
+  }));
+  return out;
+}
 // 講義の予定を入れ始める日（これより後に実行したときは実行日から）
 const CPA_SCHEDULE_START = "2026-11-09";
 
@@ -8361,9 +8384,42 @@ function App() {
     const doneVersion = settings.cpaLectureRebuild || 0;
     if (doneVersion >= CPA_REBUILD_VERSION) return;
     const start = todayStr() > CPA_SCHEDULE_START ? todayStr() : CPA_SCHEDULE_START;
+    if (doneVersion === 4) {
+      // 作り直し済み（版4）: 足りない講義の回を足し、その科目の最後の講義の予定の翌日以降（日曜を除く）に置く
+      const added = missingCpaLectureTodos(subjectTodos);
+      if (added.length) {
+        const newTasks = [];
+        const lastDate = {};
+        tasks.filter(t => t.isLecture).forEach(t => { if (!lastDate[t.subjectId] || t.date > lastDate[t.subjectId]) lastDate[t.subjectId] = t.date; });
+        added.forEach(c => {
+          const subj = CPA_LECTURE_SUBJECTS.find(x => x.id === c.subjectId);
+          const sec = subjectTodos.find(t => t.id === c.parentId);
+          const floor = subj.startFrom && subj.startFrom > start ? subj.startFrom : start;
+          let d = lastDate[c.subjectId] ? addDays(lastDate[c.subjectId], 1) : floor;
+          if (d < floor) d = floor;
+          while (new Date(d + "T00:00:00").getDay() === 0) d = addDays(d, 1);
+          lastDate[c.subjectId] = d;
+          newTasks.push({
+            id: genId(), date: d, title: `${subj.name} ${sec.text} ${c.text}`,
+            hour: null, duration: CPA_LECTURE_MINUTES / 60, priority: "medium",
+            actual: null, done: false, note: "", goalId: null,
+            kind: "study", subjectId: c.subjectId, subjectTodoId: c.id,
+            isLecture: true, originalDate: d,
+          });
+        });
+        setSubjectTodos(prev => [...prev, ...added.filter(a => !prev.some(t => t.parentId === a.parentId && t.text === a.text))]);
+        setTasks(prev => [...prev, ...newTasks]);
+        resyncPlanMarkers(newTasks.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
+          setMonthlyPlans, setWeeklyPlans);
+      }
+      setSettings(st => ({ ...st, cpaLectureRebuild: CPA_REBUILD_VERSION }));
+      return;
+    }
     if (doneVersion === 3) {
-      // 作り直し済み: 未受講の講義の予定だけを開始日から並べ直す（受講済み・トレーニング・復習はそのまま）
-      const moved = scheduleCpaLectures(subjectTodos, start);
+      // 作り直し済み: 足りない講義の回を足し、未受講の講義の予定を開始日から並べ直す（受講済み・トレーニング・復習はそのまま）
+      const added = missingCpaLectureTodos(subjectTodos);
+      if (added.length) setSubjectTodos(prev => [...prev, ...added.filter(a => !prev.some(t => t.parentId === a.parentId && t.text === a.text))]);
+      const moved = scheduleCpaLectures([...subjectTodos, ...added], start);
       setTasks(prev => [...prev.filter(t => !(t.isLecture && !t.done)), ...moved]);
       resyncPlanMarkers(moved.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
         setMonthlyPlans, setWeeklyPlans);
