@@ -366,6 +366,47 @@ function resyncPlanMarkers(placements, setMonthlyPlans, setWeeklyPlans) {
 // 赤チャート（趣味勉強>高校数学、subjectId が rc_ で始まる）のタスクか。
 function isRedChartTask(t) { return !!(t.subjectId && String(t.subjectId).startsWith("rc_")); }
 
+/* ── 赤チャート: 記録のみモード ──
+   赤チャートはいったんスケジュールに入れず、各問題が「1発で解けたか」だけを記録する。
+   ・TODOの firstTry: true=1発で解けた / false=1発では解けなかった / 未定義=未記録
+   ・記録しても復習タスク・練習タスクは作らない（間隔反復ラダーも使わない）
+   ・月/週/日への追加・自動分配も赤チャートでは使わない */
+const RC_RECORD_ONLY = true;
+const isRcRecordOnly = (subjectId) => RC_RECORD_ONLY && !!subjectId && String(subjectId).startsWith("rc_");
+
+// 記録のみモードへの移行（純関数）。
+// ・赤チャートの未完了タスク（例題・練習・復習すべて）をスケジュールから外す（完了済みの記録は残す）
+// ・赤チャートの月次・週次マーカーを外す
+// ・既に解いた問題の firstTry を履歴から判定する:
+//     マーク◎で、✖️以下の完了記録や復習タスクの完了が無ければ「1発で解けた」、
+//     それ以外（✖️/△/○、または途中で解けなかった記録あり）は「1発では解けなかった」。
+//   マークの無い問題は未記録のまま。判定済み（firstTry あり）の問題は変更しない。
+// 何度実行しても結果が変わらない（冪等）。
+function migrateRcRecordOnly({ tasks, subjectTodos, monthlyPlans, weeklyPlans }) {
+  const isRc = (x) => !!(x && x.subjectId && String(x.subjectId).startsWith("rc_"));
+  const tasksOut = tasks.filter(t => !(isRc(t) && !t.done));
+  const monthlyOut = monthlyPlans.filter(p => !isRc(p));
+  const weeklyOut = weeklyPlans.filter(p => !isRc(p));
+  let todoChanged = 0;
+  const todosOut = subjectTodos.map(td => {
+    if (!isRc(td) || td.firstTry !== undefined || !td.understanding) {
+      // 未記録の問題でも、残っている復習日は不要なので消す
+      if (isRc(td) && td.firstTry === undefined && td.reviewDue) { todoChanged++; return { ...td, reviewDue: null }; }
+      return td;
+    }
+    const failedOnce = td.understanding < 4 || tasks.some(t => t.subjectTodoId === td.id && t.done
+      && (t.isReview || (t.understanding && t.understanding < 4)));
+    todoChanged++;
+    return { ...td, firstTry: !failedOnce, reviewDue: null, status: "done", done: true };
+  });
+  return {
+    tasks: tasksOut, subjectTodos: todosOut, monthlyPlans: monthlyOut, weeklyPlans: weeklyOut,
+    removedTasks: tasks.length - tasksOut.length,
+    removedMarkers: (monthlyPlans.length - monthlyOut.length) + (weeklyPlans.length - weeklyOut.length),
+    todoChanged,
+  };
+}
+
 // 今日以降の赤チャートで「その日が埋まっている」扱いにする固定タスク:
 // 復習（間隔反復で日付が決まる）と、時刻を指定して手で置いたもの。
 function isFixedRcTask(t, today) {
@@ -1610,6 +1651,20 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   // 間隔反復ラダー: 解けた(solved=true)/解けなかった(false)でマークを1段進める。
   const completeWithUnderstanding = (task, solved, minutes) => {
     const base = todayStr(); // 「その段階になった日」を起点に次回復習日を決める
+    // 赤チャート（記録のみモード）: 1発で解けたかだけ記録し、復習・練習は作らない。
+    if (isRcRecordOnly(task.subjectId)) {
+      const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
+      setTasks(ts => ts
+        .map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString(), timeSpent: spent } : t)
+        .filter(t => t.id === task.id || !(t.subjectTodoId && t.subjectTodoId === task.subjectTodoId && !t.done)));
+      if (task.subjectTodoId) {
+        setSubjectTodos(sts => sts.map(s => s.id === task.subjectTodoId
+          ? { ...s, firstTry: s.firstTry !== undefined ? s.firstTry : solved, status: "done", done: true, reviewDue: null } : s));
+      }
+      setUnderstandingModal(null);
+      setSolveMinutes("");
+      return;
+    }
     // 現在のマークは紐づくTODO（なければタスク）から取得して1段進める
     let cur = task.understanding || 0;
     if (task.subjectTodoId) {
@@ -2626,10 +2681,14 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
         const td = t.subjectTodoId ? subjectTodos.find(x => x.id === t.subjectTodoId) : null;
         const cur = (td ? td.understanding : t.understanding) || 0;
-        const curInfo = SR_MARK[cur];
+        const rcOnly = isRcRecordOnly(t.subjectId);
+        const curInfo = rcOnly ? null : SR_MARK[cur];
         const okNext = SR_MARK[srApply(cur, true, todayStr()).understanding];
         const ngNext = SR_MARK[srApply(cur, false, todayStr()).understanding];
-        const CHOICES = [
+        const CHOICES = rcOnly ? [
+          { solved: true,  title: "1発で解けた",   sub: "記録のみ", color: C.green },
+          { solved: false, title: "解けなかった", sub: "記録のみ", color: C.red },
+        ] : [
           { solved: true,  title: "解けた",       sub: `→ ${okNext.mark}（${okNext.label}）`, color: C.green },
           { solved: false, title: "解けなかった", sub: `→ ${ngNext.mark}（${ngNext.label}）`, color: C.red },
         ];
@@ -2645,7 +2704,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               <div style={{ fontSize: 14, color: C.text, marginBottom: 4 }}>{t.title}</div>
               <div style={{ fontSize: 11, color: C.textMid, marginBottom: 14 }}>
                 {subjData && <span style={{ color: subjData.color }}>📚 {subjData.name}　</span>}
-                現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}
+                {rcOnly ? "1発で解けたかを記録します" : <>現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}</>}
               </div>
               {/* かかった時間（分）。任意入力。クイック選択 + 手入力。 */}
               <div style={{ marginBottom: 14 }}>
@@ -3860,6 +3919,29 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     const base = todayStr();
     const todo = subjectTodos.find(t => t.id === id);
     if (!todo) return;
+    // 赤チャート（記録のみモード）: 「1発で解けたか」だけを記録する。
+    // 振り返りに出るよう当日の完了記録は残すが、復習・練習の予定は作らない。
+    if (isRcRecordOnly(todo.subjectId)) {
+      const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
+      const stamp = new Date().toISOString();
+      setSubjectTodos(ts => ts.map(t => t.id === id
+        ? { ...t, firstTry: solved, status: "done", done: true, reviewDue: null } : t));
+      setTasks(ts => {
+        const existing = ts.find(t => t.subjectTodoId === id && t.date === base);
+        const taskId = existing ? existing.id : genId();
+        const next = existing
+          ? ts.map(t => t.id === existing.id ? { ...t, done: true, doneAt: stamp, timeSpent: spent } : t)
+          : [...ts, {
+              id: taskId, date: base, title: taskTitleFor(todo),
+              hour: null, duration: todoDuration(todo), priority: "medium",
+              actual: null, done: true, doneAt: stamp, timeSpent: spent, note: "",
+              goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: id,
+              originalDate: base,
+            }];
+        return next.filter(t => t.id === taskId || !(t.subjectTodoId === id && !t.done));
+      });
+      return;
+    }
     const r = srApply(todo.understanding, solved, base);
     const done = r.understanding >= 4; // ◎=復習不要=完了扱い
     setSubjectTodos(ts => ts.map(t => t.id === id
@@ -3897,6 +3979,14 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         isReview: true, reviewOf: taskId, originalDate: r.reviewDue,
       }];
     });
+  };
+  // 赤チャート: 「1発で解けたか」の記録を消して未記録に戻す。
+  const resetFirstTry = (id) => {
+    setSubjectTodos(ts => ts.map(t => {
+      if (t.id !== id) return t;
+      const { firstTry, ...rest } = t;
+      return { ...rest, status: "unwatched", done: false, understanding: null, reviewDue: null };
+    }));
   };
   // マークを直接指定する手動上書き（同じマーク再タップで解除）。
   const setUnderstanding = (id, level) => {
@@ -4582,10 +4672,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   ☑ 複数選択
                 </button>
                 <div style={{ flex: 1 }} />
+                {!isRcRecordOnly(activeSubject) && (
                 <button onClick={() => openAutoDist(parentTodos.map(t => t.id))}
                   style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px", whiteSpace: "nowrap" }) }}>
                   ⚡ 自動分配
                 </button>
+                )}
               </>
             )}
             {selectMode && (
@@ -4603,11 +4695,13 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 </div>
                 {selectedTodos.length > 0 && (
                   <>
+                    {!isRcRecordOnly(activeSubject) && (
                     <button onClick={() => openAutoDist(selectedTodos)}
                       style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px" }) }}>
                       ⚡ 自動分配
                     </button>
-                    {!autoMode && (
+                    )}
+                    {!autoMode && !isRcRecordOnly(activeSubject) && (
                       <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
                         style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
                         📅 月に追加
@@ -4880,7 +4974,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
           {(() => {
             const today = todayStr();
             const due = subjectTodos
-              .filter(t => t.reviewDue && t.reviewDue <= today && t.understanding >= 1 && t.understanding <= 3)
+              .filter(t => t.reviewDue && t.reviewDue <= today && t.understanding >= 1 && t.understanding <= 3 && !isRcRecordOnly(t.subjectId))
               .sort((a, b) => (a.reviewDue || "").localeCompare(b.reviewDue || ""));
             if (due.length === 0) return null;
             const shown = due.slice(0, 40);
@@ -5065,7 +5159,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       }}>{fmtH(displayMinutes)}{hasChildren && <span style={{ opacity: 0.6 }}> 📝{doneChildren}/{children.length}</span>}</span>
                     ) : null}
                     <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
-                      {!autoMode && (
+                      {!autoMode && !isRcRecordOnly(t.subjectId) && (
                         <div style={{ display: "flex", gap: 3 }}>
                           <button onClick={() => setMonthPickerTodo(t)} title="月を選んで追加"
                             style={{
@@ -5223,8 +5317,9 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       reviewing: { bg: C.yellow, color: "#fff", border: C.yellow, mark: "◐" },
                       done: { bg: activeSubjectData.color, color: "#fff", border: activeSubjectData.color, mark: "✓" },
                     }[cst];
-                    const U = SR_MARK[c.understanding];
-                    const cDue = c.reviewDue && c.understanding && c.understanding < 4 ? c.reviewDue : null;
+                    const cRc = isRcRecordOnly(c.subjectId);
+                    const U = cRc ? null : SR_MARK[c.understanding];
+                    const cDue = !cRc && c.reviewDue && c.understanding && c.understanding < 4 ? c.reviewDue : null;
                     const cDueToday = cDue && cDue <= todayStr();
                     return (
                       <div key={c.id} style={{
@@ -5277,6 +5372,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                   padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700,
                                 }}>{U.mark}</span>
                               )}
+                              {cRc && c.firstTry !== undefined && (
+                                <span style={{
+                                  background: (c.firstTry ? C.green : C.red) + "20", color: c.firstTry ? C.green : C.red,
+                                  padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700, whiteSpace: "nowrap",
+                                }}>{c.firstTry ? "○ 1発" : "✕ 1発ならず"}</span>
+                              )}
                               {cDue && (
                                 <span style={{
                                   fontSize: 9, fontWeight: 600,
@@ -5300,7 +5401,37 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                           )}
                         </div>
                         {/* 間隔反復ラダー: 解けた/解けなかった（◎=復習不要の項目は非表示） */}
-                        {editTodoId !== c.id && childSelectParent !== t.id && c.understanding !== 4 && (
+                        {/* 赤チャート（記録のみ）: 1発で解けたかを記録。記録済みならリセットだけ出す */}
+                        {cRc && editTodoId !== c.id && childSelectParent !== t.id && (
+                          <div style={{ display: "flex", gap: 6, marginTop: 6, marginLeft: 36, alignItems: "center" }}>
+                            {c.firstTry === undefined ? (
+                              <>
+                                <button onClick={() => { setResultMinutes(""); setResultModal({ id: c.id, solved: true }); }}
+                                  style={{
+                                    padding: "4px 12px", borderRadius: 6,
+                                    background: C.green, border: `1px solid ${C.green}`,
+                                    color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                                    lineHeight: 1, fontFamily: font,
+                                  }}>1発で解けた</button>
+                                <button onClick={() => { setResultMinutes(""); setResultModal({ id: c.id, solved: false }); }}
+                                  style={{
+                                    padding: "4px 12px", borderRadius: 6,
+                                    background: "transparent", border: `1px solid ${C.red}`,
+                                    color: C.red, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                                    lineHeight: 1, fontFamily: font,
+                                  }}>解けなかった</button>
+                              </>
+                            ) : (
+                              <button onClick={() => resetFirstTry(c.id)} title="記録を消して未記録に戻す"
+                                style={{
+                                  padding: "4px 8px", borderRadius: 6, background: "transparent",
+                                  border: `1px solid ${C.border}`, color: C.textDim, fontSize: 10,
+                                  cursor: "pointer", lineHeight: 1, fontFamily: font,
+                                }}>記録をリセット</button>
+                            )}
+                          </div>
+                        )}
+                        {!cRc && editTodoId !== c.id && childSelectParent !== t.id && c.understanding !== 4 && (
                           <div style={{ display: "flex", gap: 6, marginTop: 6, marginLeft: 36, alignItems: "center" }}>
                             <button onClick={() => { setResultMinutes(""); setResultModal({ id: c.id, solved: true }); }}
                               style={{
@@ -5609,10 +5740,11 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         if (!todo) return null;
         const subj = subjects.find(s => s.id === todo.subjectId);
         const cur = todo.understanding || 0;
-        const curInfo = SR_MARK[cur];
+        const rcOnly = isRcRecordOnly(todo.subjectId);
+        const curInfo = rcOnly ? null : SR_MARK[cur];
         const CHOICES = [
-          { solved: true,  label: "解けた",       mark: SR_MARK[srApply(cur, true, todayStr()).understanding], color: C.green, icon: "○" },
-          { solved: false, label: "解けなかった", mark: SR_MARK[srApply(cur, false, todayStr()).understanding], color: C.red, icon: "✕" },
+          { solved: true,  label: rcOnly ? "1発で解けた" : "解けた", mark: rcOnly ? null : SR_MARK[srApply(cur, true, todayStr()).understanding], color: C.green, icon: "○" },
+          { solved: false, label: "解けなかった", mark: rcOnly ? null : SR_MARK[srApply(cur, false, todayStr()).understanding], color: C.red, icon: "✕" },
         ];
         const submit = () => {
           recordResult(resultModal.id, resultModal.solved, resultMinutes);
@@ -5629,7 +5761,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               <div style={{ fontSize: 14, color: C.text, marginBottom: 4 }}>{todo.text}</div>
               <div style={{ fontSize: 11, color: C.textMid, marginBottom: 14 }}>
                 {subj && <span style={{ color: subj.color }}>📚 {subj.name}　</span>}
-                現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}
+                {rcOnly ? "1発で解けたかを記録します（復習・練習の予定は作りません）" : <>現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}</>}
               </div>
               {/* 結果（解けた/解けなかった）— 切り替え可能 */}
               <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
@@ -5651,7 +5783,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       }}>{ch.icon}</span>
                       <span style={{ textAlign: "left", lineHeight: 1.2 }}>
                         <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: active ? "#fff" : C.text }}>{ch.label}</span>
-                        <span style={{ display: "block", fontSize: 10, color: active ? "#fff" : C.textMid }}>→ {ch.mark.mark}（{ch.mark.label}）</span>
+                        {ch.mark && <span style={{ display: "block", fontSize: 10, color: active ? "#fff" : C.textMid }}>→ {ch.mark.mark}（{ch.mark.label}）</span>}
                       </span>
                     </button>
                   );
@@ -7413,6 +7545,24 @@ function App() {
       return toAdd.length ? [...prev, ...toAdd] : prev;
     });
     setSubjectCategories(prev => (prev || []).includes("趣味勉強") ? prev : [...(prev || []), "趣味勉強"]);
+  }, [syncEmail, syncStatus]);
+
+  // 赤チャート（記録のみモード）: 未完了の赤チャートタスクと月次・週次マーカーを外し、
+  // 解いた問題の「1発で解けたか」を履歴から判定する。起動ごとに1回（冪等）。
+  // メール設定済みなら初回クラウド取得の完了後に実行する。
+  const rcRecordOnlyRef = useRef(false);
+  useEffect(() => {
+    if (!RC_RECORD_ONLY || rcRecordOnlyRef.current) return;
+    if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
+    rcRecordOnlyRef.current = true;
+    // 他の起動時移行（赤チャートTODOの追記など）と競合しないよう、すべて関数形式で更新する。
+    // firstTry の判定には移行前のタスク（完了記録）を使う。
+    const histTasks = tasks;
+    const run = (patch) => migrateRcRecordOnly({ tasks: histTasks, subjectTodos: [], monthlyPlans: [], weeklyPlans: [], ...patch });
+    setSubjectTodos(prev => { const r = run({ subjectTodos: prev }); return r.todoChanged ? r.subjectTodos : prev; });
+    setTasks(prev => { const r = migrateRcRecordOnly({ tasks: prev, subjectTodos: [], monthlyPlans: [], weeklyPlans: [] }); return r.removedTasks ? r.tasks : prev; });
+    setMonthlyPlans(prev => { const r = run({ monthlyPlans: prev }); return r.monthlyPlans.length !== prev.length ? r.monthlyPlans : prev; });
+    setWeeklyPlans(prev => { const r = run({ weeklyPlans: prev }); return r.weeklyPlans.length !== prev.length ? r.weeklyPlans : prev; });
   }, [syncEmail, syncStatus]);
 
   // 既存CPAの例題（動画TODOの子）を「例題」タブへ一度だけ移行する。
