@@ -461,7 +461,8 @@ function planOneProblemPerDay(tasks, today) {
    ・jitsu: 「実」の回の番号（番号の枠を1つ使う。例: 8→実→10 なら 9）
    ・extra: 番号の後ろに続く回（財計入門の「補講」など）
    ・dl: 受講期限 [[この回まで, 期限日], ...]（オレンジ線=11月末、緑線=12月末）
-   ・daily: true の科目は日曜を除き1日1コマずつ、未受講の回を順番に予定へ入れる */
+   ・daily: true の科目は日曜を除き1日1コマずつ、未受講の回を順番に予定へ入れる
+     （startFrom があればその日から。財理・監査論は12月から受け始める） */
 const CPA_NOV = "2026-11-30", CPA_DEC = "2026-12-31";
 const CPA_LECTURE_SUBJECTS = [
   { id: "s_calc", name: "財計", color: "#d14545", daily: true, sections: [
@@ -473,7 +474,7 @@ const CPA_LECTURE_SUBJECTS = [
     { title: "上級講義", count: 9 },
     { title: "Web補講", count: 3 },
   ] },
-  { id: "s_theory", name: "財理", color: "#3a9d6e", sections: [
+  { id: "s_theory", name: "財理", color: "#3a9d6e", daily: true, startFrom: "2026-12-01", sections: [
     { title: "入門", count: 14, dl: [[14, CPA_DEC]] },
     { title: "上級講義", count: 22, dl: [[7, CPA_DEC]] },
   ] },
@@ -487,7 +488,7 @@ const CPA_LECTURE_SUBJECTS = [
     { title: "入門基礎マスター", count: 20, dl: [[20, CPA_NOV]] },
     { title: "上級講義", count: 12, dl: [[12, CPA_DEC]] },
   ] },
-  { id: "s_audit", name: "監査論", color: "#3aa0d8", sections: [
+  { id: "s_audit", name: "監査論", color: "#3aa0d8", daily: true, startFrom: "2026-12-01", sections: [
     { title: "入門", count: 5, dl: [[5, CPA_NOV]] },
     { title: "上級講義", count: 20, dl: [[20, CPA_DEC]] },
   ] },
@@ -519,15 +520,18 @@ function buildCpaLectureTodos() {
   return out;
 }
 
-// daily な科目の未受講の回を、start から日曜を除いて1日1コマずつ順番に置く。
-// 返り値: 予定タスクの配列（科目ごとに独立して並べるので、同じ日に3科目が並ぶ）。
-function scheduleCpaLectures(todos, start) {
+// daily な科目の未受講の回を、start（科目に startFrom があれば遅い方）から
+// 日曜を除いて1日1コマずつ順番に置く。onlyIds を渡すとその科目だけを対象にする。
+// 返り値: 予定タスクの配列（科目ごとに独立して並べるので、同じ日に複数科目が並ぶ）。
+function scheduleCpaLectures(todos, start, onlyIds) {
   const out = [];
-  CPA_LECTURE_SUBJECTS.filter(s => s.daily).forEach(subj => {
-    const parents = todos.filter(t => t.subjectId === subj.id && !t.parentId);
-    let d = start;
+  CPA_LECTURE_SUBJECTS.filter(s => s.daily && (!onlyIds || onlyIds.includes(s.id))).forEach(subj => {
+    const parents = todos.filter(t => t.subjectId === subj.id && !t.parentId)
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    let d = subj.startFrom && subj.startFrom > start ? subj.startFrom : start;
     parents.forEach(p => {
-      todos.filter(c => c.parentId === p.id && !c.done).forEach(c => {
+      todos.filter(c => c.parentId === p.id && !c.done && c.isLecture)
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).forEach(c => {
         while (new Date(d + "T00:00:00").getDay() === 0) d = addDays(d, 1);
         out.push({
           id: genId(), date: d, title: `${subj.name} ${p.text} ${c.text}`,
@@ -7701,7 +7705,27 @@ function App() {
     setWeeklyPlans(prev => prev.filter(p => !cpaIds.has(p.subjectId)));
     resyncPlanMarkers(newTasks.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
       setMonthlyPlans, setWeeklyPlans);
-    setSettings(st => ({ ...st, cpaLectureRebuild: 1 }));
+    setSettings(st => ({ ...st, cpaLectureRebuild: 1, cpaTheoryAuditSchedule: 1 }));
+  }, [syncEmail, syncStatus]);
+
+  // 作り直しを先に実行した端末向け: 財理・監査論の講義を12月から1日1コマで予定に入れる（一度だけ）。
+  // 作り直しを今回実行する場合はそちらで予定に入るので、ここでは何もしない。
+  const cpaTaRef = useRef(false);
+  useEffect(() => {
+    if (cpaTaRef.current) return;
+    if (syncEmail && syncStatus !== "synced") return;
+    cpaTaRef.current = true;
+    if (!settings.cpaLectureRebuild || settings.cpaTheoryAuditSchedule) return;
+    const ids = ["s_theory", "s_audit"];
+    const scheduled = new Set(tasks.filter(t => t.subjectTodoId).map(t => t.subjectTodoId));
+    const pending = subjectTodos.filter(t => ids.includes(t.subjectId) && !scheduled.has(t.subjectTodoId) && !scheduled.has(t.id));
+    const newTasks = scheduleCpaLectures(pending, todayStr(), ids);
+    if (newTasks.length) {
+      setTasks(prev => [...prev, ...newTasks]);
+      resyncPlanMarkers(newTasks.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
+        setMonthlyPlans, setWeeklyPlans);
+    }
+    setSettings(st => ({ ...st, cpaTheoryAuditSchedule: 1 }));
   }, [syncEmail, syncStatus]);
 
   // Pull from cloud on initial load if email is set
