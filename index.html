@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261109-10';
+  const APP_VERSION = '20261109-11';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -522,7 +522,8 @@ const CPA_LECTURE_MINUTES = 180;
 // 作り直しの版。内容を変えたら上げる（未実行・旧版の端末で一度だけ作り直しが走る）。
 // 版3→4 は講義の開始日の変更だけなので、版3の端末は作り直さず講義の予定だけ並べ直す。
 // 版4→5 は財理の上級講義に第23回を足すだけなので、作り直さず足りない回を追加して予定に入れる。
-const CPA_REBUILD_VERSION = 6;
+const CPA_REBUILD_VERSION = 7;
+// 版6→7 はトレーニングの初期状態（解いた結果）を足すだけなので、まだ記録の無い問題に当てる。
 // 版5→6 は管理会計のトレーニング対応表を足すだけなので、作り直さず足りない科目のトレーニングを登録する。
 
 // 作り直し済みのデータに、定義（CPA_LECTURE_SUBJECTS）より足りない講義の回を足す。
@@ -688,18 +689,39 @@ const CPA_MGMT_TRAININGS = [
 // 科目ごとのトレーニング対応表
 const CPA_TRAININGS = [["s_calc", CPA_CALC_TRAININGS], ["s_mgmt", CPA_MGMT_TRAININGS]];
 const CPA_TRAINING_MINUTES = 15; // トレーニング・ミニテスト1問の目安（分）
-// 作り直し前に解いた結果（ラダーの初期状態）。[区分, 回, 問題, 解けたか]
+// 作り直し前に解いた結果（ラダーの初期状態）。[科目id, 区分, 回, 問題, 解けたか]
 // 解けた → ◎（復習不要）、解けなかった → ✖️（翌日復習。復習タスクも入れる）。
-const CPA_CALC_INITIAL_RESULTS = [
-  ["基礎マスターⅠ", 1, "トレ① 2-1", true],
-  ["基礎マスターⅠ", 1, "トレ① 2-2", true],
-  ["基礎マスターⅠ", 1, "トレ① 2-3", true],
-  ["基礎マスターⅠ", 1, "トレ① 2-4", true],
-  ["基礎マスターⅠ", 1, "トレ① 2-5", true],
-  ["基礎マスターⅠ", 1, "トレ① 2-6", false],
-  ["基礎マスターⅠ", 1, "トレ①短 2-1", true],
+const CPA_INITIAL_RESULTS = [
+  ["s_calc", "基礎マスターⅠ", 1, "トレ① 2-1", true],
+  ["s_calc", "基礎マスターⅠ", 1, "トレ① 2-2", true],
+  ["s_calc", "基礎マスターⅠ", 1, "トレ① 2-3", true],
+  ["s_calc", "基礎マスターⅠ", 1, "トレ① 2-4", true],
+  ["s_calc", "基礎マスターⅠ", 1, "トレ① 2-5", true],
+  ["s_calc", "基礎マスターⅠ", 1, "トレ① 2-6", false],
+  ["s_calc", "基礎マスターⅠ", 1, "トレ①短 2-1", true],
+  ["s_mgmt", "入門", 1, "計算 1-1-1", true],
+  ["s_mgmt", "入門", 1, "計算 1-2-1", true],
+  ["s_mgmt", "入門", 1, "計算 1-2-2", true],
 ];
 const CPA_INITIAL_RESULT_DATE = "2026-11-09"; // 上の結果を記録した日
+// 既存データのトレーニングTODOに初期状態を当てる（まだ記録の無い問題だけ・冪等）。
+// ✖️になる結果は次回復習日（reviewDue）が付くので、科目画面の「今日の復習」に出る。
+// （作り直し時は復習タスクも入れるが、既存データへの追加では入れない）
+function applyCpaInitialResults(todos) {
+  let changed = false;
+  const out = todos.map(t => {
+    if (t.track !== "training" || !t.parentId || t.understanding || t.done) return t;
+    const parent = todos.find(p => p.id === t.parentId);
+    const init = parent && CPA_INITIAL_RESULTS.find(([sid, sec, n, it]) =>
+      sid === t.subjectId && parent.text === `${sec} 第${n}回` && it === t.text);
+    if (!init) return t;
+    const r = srApply(0, init[4], CPA_INITIAL_RESULT_DATE);
+    changed = true;
+    return { ...t, understanding: r.understanding, reviewDue: r.reviewDue,
+      status: r.understanding >= 4 ? "done" : "reviewing", done: r.understanding >= 4 };
+  });
+  return changed ? out : todos;
+}
 
 // トレーニングTODOを作る（トレーニングタブ: 講義の回=親、問題=子）。
 // 親は「基礎マスターⅠ 第1回」…と講義順に並ぶ（財計の上級の補講分は「Web補講」）。
@@ -717,8 +739,8 @@ function buildCpaTrainingTodos(todos, onlySubjects) {
     items.forEach(item => {
       // ミニテストは区分ごとに①から振り直されるので、予定のタイトル用に区分名を付ける
       const problem = /^ミニテスト/.test(item) ? `${secTitle} ${item}` : item;
-      const init = sid === "s_calc" && CPA_CALC_INITIAL_RESULTS.find(([sec, no, it]) => sec === secTitle && no === n && it === item);
-      const r = init ? srApply(0, init[3], CPA_INITIAL_RESULT_DATE) : null;
+      const init = CPA_INITIAL_RESULTS.find(([s2, sec, no, it]) => s2 === sid && sec === secTitle && no === n && it === item);
+      const r = init ? srApply(0, init[4], CPA_INITIAL_RESULT_DATE) : null;
       out.push({ id: genId(), subjectId: sid, parentId: pid, text: item, problem,
         minutes: CPA_TRAINING_MINUTES, track: "training",
         ...(r ? { understanding: r.understanding, reviewDue: r.reviewDue,
@@ -8500,8 +8522,11 @@ function App() {
       const add = missingCpaTrainingTodos(prev);
       return add.length ? [...prev, ...add] : prev;
     });
-    if (doneVersion === 5) {
+    // 解いた結果（初期状態）を、まだ記録の無い問題に当てる（関数形式なので、直前に足したトレーニングにも当たる）
+    const applyInitialResults = () => setSubjectTodos(prev => applyCpaInitialResults(prev));
+    if (doneVersion === 5 || doneVersion === 6) {
       addMissingTrainings();
+      applyInitialResults();
       setSettings(st => ({ ...st, cpaLectureRebuild: CPA_REBUILD_VERSION }));
       return;
     }
@@ -8534,6 +8559,7 @@ function App() {
           setMonthlyPlans, setWeeklyPlans);
       }
       addMissingTrainings();
+      applyInitialResults();
       setSettings(st => ({ ...st, cpaLectureRebuild: CPA_REBUILD_VERSION }));
       return;
     }
@@ -8546,6 +8572,7 @@ function App() {
       resyncPlanMarkers(moved.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
         setMonthlyPlans, setWeeklyPlans);
       addMissingTrainings();
+      applyInitialResults();
       setSettings(st => ({ ...st, cpaLectureRebuild: CPA_REBUILD_VERSION }));
       return;
     }
