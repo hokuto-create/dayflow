@@ -455,6 +455,94 @@ function planOneProblemPerDay(tasks, today) {
   return moves;
 }
 
+/* ── 会計士（CPA勉強）講義の受講計画 ──
+   2027年合格目標 2年L・S本科生（TAC札幌校）の講義日程表から作成。1講義=約3時間。
+   ・done: 受講済みの回数（先頭から。日程表でピンクに塗った回）
+   ・jitsu: 「実」の回の番号（番号の枠を1つ使う。例: 8→実→10 なら 9）
+   ・extra: 番号の後ろに続く回（財計入門の「補講」など）
+   ・dl: 受講期限 [[この回まで, 期限日], ...]（オレンジ線=11月末、緑線=12月末）
+   ・daily: true の科目は日曜を除き1日1コマずつ、未受講の回を順番に予定へ入れる */
+const CPA_NOV = "2026-11-30", CPA_DEC = "2026-12-31";
+const CPA_LECTURE_SUBJECTS = [
+  { id: "s_calc", name: "財計", color: "#d14545", daily: true, sections: [
+    { title: "入門", count: 6, jitsu: [6], extra: ["補講"], done: 7 },
+    { title: "基礎マスターⅠ", count: 19, jitsu: [9, 19], done: 1, dl: [[19, CPA_NOV]] },
+    { title: "基礎マスターⅡ", count: 16, jitsu: [9, 16], dl: [[16, CPA_NOV]] },
+    { title: "基礎マスターⅢ", count: 12, jitsu: [12], dl: [[12, CPA_DEC]] },
+    { title: "基礎マスターⅣ", count: 12, jitsu: [12], dl: [[12, CPA_DEC]] },
+    { title: "上級講義", count: 9 },
+    { title: "Web補講", count: 3 },
+  ] },
+  { id: "s_theory", name: "財理", color: "#3a9d6e", sections: [
+    { title: "入門", count: 14, dl: [[14, CPA_DEC]] },
+    { title: "上級講義", count: 22, dl: [[7, CPA_DEC]] },
+  ] },
+  { id: "s_mgmt", name: "管理会計", color: "#d4a528", daily: true, sections: [
+    { title: "入門", count: 9, jitsu: [9], done: 1, dl: [[9, CPA_NOV]] },
+    { title: "基礎マスター", count: 22, jitsu: [8, 15, 22], dl: [[8, CPA_NOV], [22, CPA_DEC]] },
+    { title: "上級講義", count: 11, dl: [[11, CPA_DEC]] },
+    { title: "Web補講", count: 3, dl: [[3, CPA_DEC]] },
+  ] },
+  { id: "s_law", name: "企業法", color: "#4a8ed1", daily: true, sections: [
+    { title: "入門基礎マスター", count: 20, dl: [[20, CPA_NOV]] },
+    { title: "上級講義", count: 12, dl: [[12, CPA_DEC]] },
+  ] },
+  { id: "s_audit", name: "監査論", color: "#3aa0d8", sections: [
+    { title: "入門", count: 5, dl: [[5, CPA_NOV]] },
+    { title: "上級講義", count: 20, dl: [[20, CPA_DEC]] },
+  ] },
+];
+const CPA_LECTURE_MINUTES = 180;
+
+// 講義TODO（区分=親、各回=子）を作る。子は isLecture: true（解けた/解けなかったは使わない）。
+function buildCpaLectureTodos() {
+  const out = [];
+  let seq = 0;
+  CPA_LECTURE_SUBJECTS.forEach(subj => {
+    subj.sections.forEach(sec => {
+      const pid = genId();
+      const allDone = (sec.done || 0) >= sec.count + (sec.extra || []).length;
+      out.push({ id: pid, subjectId: subj.id, text: sec.title, minutes: null,
+        status: allDone ? "done" : "unwatched", done: allDone, track: "video", createdAt: ++seq });
+      const labels = [];
+      for (let n = 1; n <= sec.count; n++) labels.push({ n, text: (sec.jitsu || []).includes(n) ? `第${n}回 実` : `第${n}回` });
+      (sec.extra || []).forEach(x => labels.push({ n: null, text: x }));
+      labels.forEach((l, i) => {
+        const done = i < (sec.done || 0);
+        const dl = l.n != null ? ((sec.dl || []).find(([upTo]) => l.n <= upTo) || [])[1] || null : null;
+        out.push({ id: genId(), subjectId: subj.id, parentId: pid, text: l.text,
+          minutes: CPA_LECTURE_MINUTES, status: done ? "done" : "unwatched", done,
+          track: "video", isLecture: true, deadline: dl, createdAt: ++seq });
+      });
+    });
+  });
+  return out;
+}
+
+// daily な科目の未受講の回を、start から日曜を除いて1日1コマずつ順番に置く。
+// 返り値: 予定タスクの配列（科目ごとに独立して並べるので、同じ日に3科目が並ぶ）。
+function scheduleCpaLectures(todos, start) {
+  const out = [];
+  CPA_LECTURE_SUBJECTS.filter(s => s.daily).forEach(subj => {
+    const parents = todos.filter(t => t.subjectId === subj.id && !t.parentId);
+    let d = start;
+    parents.forEach(p => {
+      todos.filter(c => c.parentId === p.id && !c.done).forEach(c => {
+        while (new Date(d + "T00:00:00").getDay() === 0) d = addDays(d, 1);
+        out.push({
+          id: genId(), date: d, title: `${subj.name} ${p.text} ${c.text}`,
+          hour: null, duration: CPA_LECTURE_MINUTES / 60, priority: "medium",
+          actual: null, done: false, note: "", goalId: null,
+          kind: "study", subjectId: subj.id, subjectTodoId: c.id,
+          isLecture: true, originalDate: d,
+        });
+        d = addDays(d, 1);
+      });
+    });
+  });
+  return out;
+}
+
 /* ── INITIAL DATA ── */
 const SAMPLE_GOALS = [
   { id: "g1", title: "公認会計士 短答合格", color: C.blue, deadline: "2026-12-01", note: "2026年12月 短答式試験合格" },
@@ -1773,6 +1861,14 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
     // If non-study, just check
     if (task.kind === "other") {
       setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString() } : t));
+      return;
+    }
+    // 講義はチェックだけで受講済みにする（解けた/解けなかったは聞かない）
+    if (task.isLecture) {
+      setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString() } : t));
+      if (task.subjectTodoId) {
+        setSubjectTodos(sts => sts.map(s => s.id === task.subjectTodoId ? { ...s, status: "done", done: true } : s));
+      }
       return;
     }
     // Open understanding modal
@@ -3911,6 +4007,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
   const setStatus = (id, status) => {
     setSubjectTodos(ts => ts.map(t => t.id === id ? { ...t, status, done: status === "done" } : t));
+    // 講義を受講済みにしたら、予定に入っている同じ回のタスクも完了にする
+    const todo = subjectTodos.find(t => t.id === id);
+    if (todo && todo.isLecture && status === "done") {
+      const stamp = new Date().toISOString();
+      setTasks(ts => ts.map(t => t.subjectTodoId === id && !t.done ? { ...t, done: true, doneAt: stamp } : t));
+    }
   };
 
   // 間隔反復ラダー: 解けた/解けなかったでマークを1段進め、次回復習日を設定する。
@@ -5384,6 +5486,10 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                   color: cDueToday ? C.red : C.textMid,
                                 }}>{cDueToday ? "● 今日復習" : `次回 ${cDue.slice(5).replace("-", "/")}`}</span>
                               )}
+                              {c.isLecture && c.deadline && cst !== "done" && (
+                                <span style={{ fontSize: 9, fontWeight: 700, whiteSpace: "nowrap",
+                                  color: c.deadline < todayStr() ? C.red : C.textMid }}>〆{c.deadline.slice(5).replace("-", "/")}</span>
+                              )}
                               {c.minutes ? <span style={{ fontSize: 10, color: activeSubjectData.color }}>{fmtH(c.minutes)}</span> : null}
                               <button onClick={() => {
                                 if (confirmDelete === c.id) {
@@ -5431,7 +5537,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                             )}
                           </div>
                         )}
-                        {!cRc && editTodoId !== c.id && childSelectParent !== t.id && c.understanding !== 4 && (
+                        {!cRc && !c.isLecture && editTodoId !== c.id && childSelectParent !== t.id && c.understanding !== 4 && (
                           <div style={{ display: "flex", gap: 6, marginTop: 6, marginLeft: 36, alignItems: "center" }}>
                             <button onClick={() => { setResultMinutes(""); setResultModal({ id: c.id, solved: true }); }}
                               style={{
@@ -7565,22 +7671,37 @@ function App() {
     setWeeklyPlans(prev => { const r = run({ weeklyPlans: prev }); return r.weeklyPlans.length !== prev.length ? r.weeklyPlans : prev; });
   }, [syncEmail, syncStatus]);
 
-  // 既存CPAの例題（動画TODOの子）を「例題」タブへ一度だけ移行する。
-  // 赤チャート移行と同様、メール設定済みなら初回クラウド取得の完了後に実行する。
-  const cpaExMigratedRef = useRef(false);
+  // 会計士（CPA勉強）を講義の受講計画で作り直す（一度だけ。settings.cpaLectureRebuild で記録）。
+  // ・CPA勉強の科目・TODO・未完了タスク・月次/週次マーカーを全て消す（完了済みタスクは振り返り用に残す）
+  // ・財計/財理/管理会計/企業法/監査論の講義TODOを入れ、財計・管理会計・企業法は日曜以外1日1コマで予定に入れる
+  // メール設定済みなら初回クラウド取得の完了後に実行する（他端末で実行済みならフラグが同期されて再実行しない）。
+  // ※旧来の「例題タブへの移行」「例題・トレーニングの親を自動で作る」処理は、作り直しで不要になったので廃止。
+  const cpaRebuildRef = useRef(false);
   useEffect(() => {
-    if (cpaExMigratedRef.current) return;
+    if (cpaRebuildRef.current) return;
     if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
-    cpaExMigratedRef.current = true;
-    setSubjectTodos(prev => {
-      let next = prev;
-      const r = migrateCpaExampleTrack({ subjectTodos: next, subjects });
-      if (r.moved) next = r.subjectTodos;
-      // 例題・トレーニングタブにも動画と同じ親（章立て）を用意する。
-      const r2 = ensureCpaParallelParents({ subjectTodos: next, subjects });
-      if (r2.added) next = r2.subjectTodos;
-      return next === prev ? prev : next;
+    cpaRebuildRef.current = true;
+    if (settings.cpaLectureRebuild) return;
+    const oldCpaIds = new Set(subjects.filter(sb => (sb.category || "CPA勉強") === "CPA勉強").map(sb => sb.id));
+    const cpaIds = new Set([...oldCpaIds, ...CPA_LECTURE_SUBJECTS.map(sb => sb.id)]);
+    const newTodos = buildCpaLectureTodos();
+    const start = todayStr() > "2026-11-10" ? todayStr() : "2026-11-10";
+    const newTasks = scheduleCpaLectures(newTodos, start);
+    setSubjects(prev => {
+      const others = prev.filter(sb => !cpaIds.has(sb.id) && (sb.category || "CPA勉強") !== "CPA勉強");
+      const cpa = CPA_LECTURE_SUBJECTS.map(({ id, name, color }) => {
+        const ex = prev.find(sb => sb.id === id);
+        return ex ? { ...ex, category: "CPA勉強" } : { id, name, color, category: "CPA勉強" };
+      });
+      return [...cpa, ...others];
     });
+    setSubjectTodos(prev => [...newTodos, ...prev.filter(t => !cpaIds.has(t.subjectId))]);
+    setTasks(prev => [...prev.filter(t => !(cpaIds.has(t.subjectId) && !t.done)), ...newTasks]);
+    setMonthlyPlans(prev => prev.filter(p => !cpaIds.has(p.subjectId)));
+    setWeeklyPlans(prev => prev.filter(p => !cpaIds.has(p.subjectId)));
+    resyncPlanMarkers(newTasks.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
+      setMonthlyPlans, setWeeklyPlans);
+    setSettings(st => ({ ...st, cpaLectureRebuild: 1 }));
   }, [syncEmail, syncStatus]);
 
   // Pull from cloud on initial load if email is set
