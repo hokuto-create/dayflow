@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261109-5';
+  const APP_VERSION = '20261109-6';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -717,6 +717,98 @@ function scheduleCpaLectures(todos, start) {
     });
   });
   return out;
+}
+
+/* ── 講義の範囲（テキスト・トレーニング） ──
+   講義の回に対応するトレーニング（lectureTodoId）から、その回の範囲を作る。
+   テキストの範囲はトレーニング番号から割り出す（「トレ① 2-1」→ テキスト① 第2章）。 */
+function lectureRange(lectureTodoId, subjectTodos) {
+  if (!lectureTodoId) return null;
+  const items = subjectTodos.filter(t => t.lectureTodoId === lectureTodoId)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  if (items.length === 0) return null;
+  const texts = [];
+  items.forEach(t => {
+    const m = t.text.match(/^トレ([①-⑳])短?\s*(\d+)-/);
+    if (m) { const k = `テキスト${m[1]} 第${m[2]}章`; if (!texts.includes(k)) texts.push(k); }
+  });
+  const trainings = items.filter(t => /^トレ/.test(t.text));
+  const minis = items.filter(t => /^ミニテスト/.test(t.text));
+  return { texts, trainings, minis, items, summary: summarizeTrainings(trainings) };
+}
+// 「トレ① 2-1, 2-2, 2-3」→「トレ① 2-1〜2-3」のように、同じ冊・章の連番をまとめる
+function summarizeTrainings(trainings) {
+  const groups = [];
+  trainings.forEach(t => {
+    const m = t.text.match(/^(トレ[①-⑳]短?)\s*(\d+)-(\d+)$/);
+    if (!m) { groups.push({ label: t.text }); return; }
+    const key = `${m[1]}|${m[2]}`;
+    const last = groups[groups.length - 1];
+    if (last && last.key === key && last.nums[last.nums.length - 1] === +m[3] - 1) last.nums.push(+m[3]);
+    else groups.push({ key, pre: m[1], ch: m[2], nums: [+m[3]] });
+  });
+  return groups.map(g => g.label || (g.nums.length > 1
+    ? `${g.pre} ${g.ch}-${g.nums[0]}〜${g.ch}-${g.nums[g.nums.length - 1]}`
+    : `${g.pre} ${g.ch}-${g.nums[0]}`)).join("、");
+}
+const RANGE_MARK = {
+  1: { mark: "✕", color: C.red }, 2: { mark: "△", color: C.yellow },
+  3: { mark: "○", color: C.blue }, 4: { mark: "◎", color: C.green },
+};
+// 講義カードに添える1行（テキスト・トレーニングの範囲）
+function LectureRangeLine({ task, subjectTodos }) {
+  if (!task.isLecture) return null;
+  const r = lectureRange(task.subjectTodoId, subjectTodos);
+  if (!r) return null;
+  return (
+    <div style={{ fontSize: 11, color: C.textMid, marginTop: 3, lineHeight: 1.4, wordBreak: "break-word" }}>
+      {r.texts.length > 0 && <span style={{ marginRight: 8 }}>📖 {r.texts.join("・")}</span>}
+      <span>📝 {r.summary}{r.minis.length ? `　＋${r.minis.map(m => m.text).join("・")}` : ""}</span>
+    </div>
+  );
+}
+// 画面が広いときに右側に出す「この日の講義の範囲」。問題ごとの記録（◎✕など）も見せる。
+function LectureRangePanel({ tasks, subjectTodos, subjects, date }) {
+  const lectures = tasks.filter(t => t.isLecture && t.date === date)
+    .sort((a, b) => (a.hour ?? 99) - (b.hour ?? 99));
+  return (
+    <div style={{ ...card({ padding: 14 }), position: "sticky", top: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 10 }}>📚 この日の講義の範囲</div>
+      {lectures.length === 0 && <div style={{ fontSize: 12, color: C.textMid }}>この日の講義はありません</div>}
+      {lectures.map(t => {
+        const subj = subjects.find(s => s.id === t.subjectId);
+        const r = lectureRange(t.subjectTodoId, subjectTodos);
+        return (
+          <div key={t.id} style={{ padding: "10px 0", borderTop: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, textDecoration: t.done ? "line-through" : "none" }}>
+              {subj && <span style={{ color: subj.color, marginRight: 6 }}>●</span>}{t.title}
+            </div>
+            {!r && <div style={{ fontSize: 11, color: C.textDim, marginTop: 4 }}>範囲は未登録です</div>}
+            {r && (
+              <>
+                {r.texts.length > 0 && (
+                  <div style={{ fontSize: 12, color: C.text, marginTop: 6 }}>📖 {r.texts.join("・")}</div>
+                )}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                  {r.items.map(it => {
+                    const M = RANGE_MARK[it.understanding];
+                    return (
+                      <span key={it.id} style={{
+                        fontSize: 11, padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap",
+                        background: M ? M.color + "18" : C.surfaceUp,
+                        border: `1px solid ${M ? M.color + "60" : C.border}`,
+                        color: M ? M.color : C.textMid,
+                      }}>{M && <b style={{ marginRight: 3 }}>{M.mark}</b>}{it.text}</span>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /* ── INITIAL DATA ── */
@@ -1823,6 +1915,13 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [extraDates, setExtraDates] = useState([]); // additional dates for bulk add
   const [showBulk, setShowBulk] = useState(false);
   const [understandingModal, setUnderstandingModal] = useState(null); // task being completed
+  // 画面が広いとき（900px以上）はタイムラインの右に講義の範囲パネルを出す
+  const [wideLayout, setWideLayout] = useState(() => window.innerWidth >= 900);
+  useEffect(() => {
+    const onResize = () => setWideLayout(window.innerWidth >= 900);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   // 講義を受講済みにした直後の「復習したい例題」登録モーダル（対象の講義タスク）
   const [lectureExModal, setLectureExModal] = useState(null);
   const [lectureExText, setLectureExText] = useState("");
@@ -2116,7 +2215,8 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const hours = Array.from({ length: endH - startH }, (_, i) => i + startH);
 
   return (
-    <div style={{ padding: 16, maxWidth: 600, margin: "0 auto" }}>
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-start", gap: 16, padding: wideLayout ? "0 16px" : 0 }}>
+    <div style={{ padding: wideLayout ? "16px 0" : 16, maxWidth: 600, margin: wideLayout ? 0 : "0 auto", flex: 1, minWidth: 0 }}>
       {/* Date selector */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
         <button onClick={() => setSelectedDate(addDays(selectedDate, -7))} style={{ ...btn(), padding: "5px 8px", fontSize: 11 }}>‹‹ 1週</button>
@@ -2676,6 +2776,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                     {t.isReview && <span style={{ color: C.yellow, marginLeft: 6, fontWeight: 700 }}>🔁 復習</span>}
                     {t.isPractice && <span style={{ color: C.accent, marginLeft: 6, fontWeight: 700 }}>📝 練習</span>}
                   </div>
+                  <LectureRangeLine task={t} subjectTodos={subjectTodos} />
                 </div>
                 <button onClick={() => setScheduleModal(t)}
                   style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>時間設定</button>
@@ -2793,6 +2894,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   {t.timeSpent != null && <span style={{ marginLeft: 8, color: C.green, fontWeight: 600 }}>⏱ {t.timeSpent}分</span>}
                 </div>
                 )}
+                {!stack && <LectureRangeLine task={t} subjectTodos={subjectTodos} />}
               </div>
               <div style={{ display: "flex", gap: 4, flexShrink: 0, flexWrap: stack ? "wrap" : "nowrap", justifyContent: stack ? "flex-start" : "flex-end" }}>
                 <button onClick={() => toggleDone(t)}
@@ -3449,6 +3551,13 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           </div>
         );
       })()}
+    </div>
+    {/* 画面が広いとき（iPad 横向きなど）は右側に講義の範囲を出す */}
+    {wideLayout && (
+      <div style={{ width: 360, flexShrink: 0, padding: "16px 0", alignSelf: "stretch" }}>
+        <LectureRangePanel tasks={tasks} subjectTodos={subjectTodos} subjects={subjects} date={selectedDate} />
+      </div>
+    )}
     </div>
   );
 }
@@ -8277,7 +8386,7 @@ function App() {
       <Nav view={view} setView={setView} reviewPending={reviewPending} />
 
       {/* Views */}
-      <div style={{ flex: 1, overflowY: "auto" }}>
+      <div style={{ flex: 1 }}>{/* ページ全体（window）がスクロールするので、ここはスクロール領域にしない（右側パネルの sticky を効かせるため） */}
         {view === "day"    && <DayView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} goals={goals} subjects={subjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} settings={settings}
           delayStats={delayStats} majorDelay={majorDelay} onOpenRecovery={openRecovery} recoveryUndoFresh={recoveryUndoFresh} onUndoRecovery={undoRecovery} />}
         {view === "review" && <ReviewView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} setView={setView} subjects={subjects} subjectTodos={subjectTodos} settings={settings} goals={goals} reviews={reviews} setReviews={setReviews} />}
