@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261109-8';
+  const APP_VERSION = '20261109-9';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -1011,60 +1011,117 @@ function LectureRangeLine({ task, subjectTodos, compact }) {
     </div>
   );
 }
-// 画面が広いときに右側に出す「この日の講義の範囲」。問題ごとの記録（◎✕など）も見せる。
-function LectureRangePanel({ tasks, subjectTodos, subjects, date }) {
-  const lectures = tasks.filter(t => t.isLecture && t.date === date)
-    .sort((a, b) => (a.hour ?? 99) - (b.hour ?? 99));
+// 画面が広いときに右側に出す「この日のTODO」。
+// 講義（範囲つき）とその回のトレーニング・ミニテスト、その日の復習、その他の予定をチェックリストで並べる。
+// チェックは今日の画面のカードと同じ動き（onToggle = DayView の toggleDone）。
+function TodoCheck({ done, onClick, disabled }) {
   return (
-    <div style={{ ...card({ padding: 14 }), position: "sticky", top: 16 }}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 10 }}>📚 この日の講義の範囲</div>
-      {lectures.length === 0 && <div style={{ fontSize: 12, color: C.textMid }}>この日の講義はありません</div>}
-      {lectures.map(t => {
-        const subj = subjects.find(s => s.id === t.subjectId);
-        const r = lectureRange(t.subjectTodoId, subjectTodos);
-        return (
-          <div key={t.id} style={{ padding: "10px 0", borderTop: `1px solid ${C.border}` }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, textDecoration: t.done ? "line-through" : "none" }}>
-              {subj && <span style={{ color: subj.color, marginRight: 6 }}>●</span>}{t.title}
-            </div>
-            {!r && <div style={{ fontSize: 11, color: C.textDim, marginTop: 4 }}>範囲は未登録です</div>}
-            {r && (
-              <>
-                {r.content.map((g, i) => (
-                  <div key={i} style={{ marginTop: 6 }}>
-                    {(g.book || g.pages) && (
-                      <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>
-                        📖 {g.book}{g.book && g.pages ? " " : ""}{g.pages}
-                      </div>
-                    )}
-                    {g.units.map((u, j) => (
-                      <div key={j} style={{ fontSize: 12, color: C.text, lineHeight: 1.5, paddingLeft: (g.book || g.pages) ? 18 : 0 }}>
-                        {!(g.book || g.pages) && j === 0 ? "📖 " : ""}{u}
-                      </div>
-                    ))}
-                    {g.note && <div style={{ fontSize: 11, color: C.textMid, paddingLeft: 18 }}>※ {g.note}</div>}
+    <button onClick={onClick} disabled={disabled} style={{
+      width: 22, height: 22, borderRadius: 6, flexShrink: 0, padding: 0, lineHeight: 1,
+      border: `1.5px solid ${done ? C.green : disabled ? C.border : C.textMid}`,
+      background: done ? C.green : "transparent", color: "#fff", fontSize: 13, fontWeight: 700,
+      cursor: disabled ? "default" : "pointer", fontFamily: font,
+    }}>{done ? "✓" : ""}</button>
+  );
+}
+function TodoMark({ level }) {
+  const M = RANGE_MARK[level];
+  if (!M) return null;
+  return <span style={{ fontSize: 10, fontWeight: 700, color: M.color, background: M.color + "18",
+    border: `1px solid ${M.color}60`, borderRadius: 4, padding: "0 4px", flexShrink: 0 }}>{M.mark}</span>;
+}
+function DayTodoPanel({ tasks, subjectTodos, subjects, date, onToggle }) {
+  const dayTasks = tasks.filter(t => t.date === date);
+  const byHour = (a, b) => (a.hour ?? 99) - (b.hour ?? 99);
+  const lectures = dayTasks.filter(t => t.isLecture).sort(byHour);
+  const shown = new Set(lectures.map(t => t.id));
+  // 講義ごとのトレーニング・ミニテスト（その日の予定タスクがあればそれでチェックする）
+  const lectureBlocks = lectures.map(t => {
+    const r = lectureRange(t.subjectTodoId, subjectTodos);
+    const items = (r ? r.items : []).map(it => {
+      const task = dayTasks.find(x => x.subjectTodoId === it.id && !x.isReview);
+      if (task) shown.add(task.id);
+      return { it, task };
+    });
+    return { t, r, items };
+  });
+  const reviews = dayTasks.filter(t => t.isReview && !shown.has(t.id)).sort(byHour);
+  reviews.forEach(t => shown.add(t.id));
+  const others = dayTasks.filter(t => !shown.has(t.id)).sort(byHour);
+  const total = dayTasks.length, doneCount = dayTasks.filter(t => t.done).length;
+  const subjOf = (t) => subjects.find(s => s.id === t.subjectId);
+  const todoOf = (t) => t.subjectTodoId ? subjectTodos.find(x => x.id === t.subjectTodoId) : null;
+  const rowStyle = { display: "flex", alignItems: "center", gap: 8, padding: "4px 0" };
+  const Section = ({ title, children }) => (
+    <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginTop: 8 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.textMid, marginBottom: 4 }}>{title}</div>
+      {children}
+    </div>
+  );
+  const TaskRow = ({ t, label }) => {
+    const subj = subjOf(t);
+    const td = todoOf(t);
+    return (
+      <div style={rowStyle}>
+        <TodoCheck done={t.done} onClick={() => onToggle(t)} />
+        <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: t.done ? C.textMid : C.text,
+          textDecoration: t.done ? "line-through" : "none", wordBreak: "break-word" }}>
+          {subj && <span style={{ color: subj.color, marginRight: 4 }}>●</span>}{label || abbrevTitle(t.title)}
+        </span>
+        {td && <TodoMark level={td.understanding} />}
+      </div>
+    );
+  };
+  return (
+    <div data-panel="day-todo" style={{ ...card({ padding: 14 }), position: "sticky", top: 16, maxHeight: "calc(100vh - 32px)", overflowY: "auto" }}>
+      <div style={{ display: "flex", alignItems: "baseline", marginBottom: 4 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, flex: 1 }}>📋 この日のTODO</div>
+        {total > 0 && <div style={{ fontSize: 11, color: C.textMid }}>{doneCount}/{total} 完了</div>}
+      </div>
+      {total === 0 && <div style={{ fontSize: 12, color: C.textMid, marginTop: 6 }}>この日の予定はありません</div>}
+      {lectureBlocks.length > 0 && (
+        <Section title="📚 講義">
+          {lectureBlocks.map(({ t, r, items }) => (
+            <div key={t.id} style={{ marginBottom: 10 }}>
+              <div style={rowStyle}>
+                <TodoCheck done={t.done} onClick={() => onToggle(t)} />
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: t.done ? C.textMid : C.text,
+                  textDecoration: t.done ? "line-through" : "none" }}>
+                  {subjOf(t) && <span style={{ color: subjOf(t).color, marginRight: 4 }}>●</span>}{t.title}
+                </span>
+              </div>
+              <div style={{ paddingLeft: 30 }}>
+                {!r && <div style={{ fontSize: 11, color: C.textDim }}>範囲は未登録です</div>}
+                {r && r.content.map((g, i) => (
+                  <div key={i} style={{ fontSize: 11, color: C.textMid, lineHeight: 1.5, marginBottom: 2 }}>
+                    📖 {g.book && <b style={{ color: C.text }}>{g.book} </b>}{g.pages && <b style={{ color: C.text }}>{g.pages}　</b>}
+                    {g.units.join("／")}{g.note && <span>（{g.note}）</span>}
                   </div>
                 ))}
-                {r.items.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
-                  {r.items.map(it => {
-                    const M = RANGE_MARK[it.understanding];
-                    return (
-                      <span key={it.id} style={{
-                        fontSize: 11, padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap",
-                        background: M ? M.color + "18" : C.surfaceUp,
-                        border: `1px solid ${M ? M.color + "60" : C.border}`,
-                        color: M ? M.color : C.textMid,
-                      }}>{M && <b style={{ marginRight: 3 }}>{M.mark}</b>}{it.text}</span>
-                    );
-                  })}
-                </div>
-                )}
-              </>
-            )}
-          </div>
-        );
-      })}
+                {items.map(({ it, task }) => (
+                  <div key={it.id} style={rowStyle}>
+                    <TodoCheck done={task ? task.done : !!it.done} disabled={!task} onClick={() => task && onToggle(task)} />
+                    <span style={{ flex: 1, fontSize: 12, color: (task && task.done) || it.done ? C.textMid : C.text,
+                      textDecoration: (task && task.done) ? "line-through" : "none" }}>📝 {it.text}</span>
+                    <TodoMark level={it.understanding} />
+                    {!task && !it.understanding && <span style={{ fontSize: 10, color: C.textDim, flexShrink: 0 }}>受講後に追加</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </Section>
+      )}
+      {reviews.length > 0 && (
+        <Section title={`🔁 復習（${reviews.filter(t => t.done).length}/${reviews.length}）`}>
+          {reviews.map(t => <TaskRow key={t.id} t={t} label={abbrevTitle(t.title).replace(/^復習[:：]\s*/, "")} />)}
+        </Section>
+      )}
+      {others.length > 0 && (
+        <Section title="🗒 その他">
+          {others.map(t => <TaskRow key={t.id} t={t} />)}
+        </Section>
+      )}
     </div>
   );
 }
@@ -3810,10 +3867,10 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         );
       })()}
     </div>
-    {/* 画面が広いとき（iPad 横向きなど）は右側に講義の範囲を出す */}
+    {/* 画面が広いとき（iPad 横向きなど）は右側にこの日のTODO（講義の範囲・トレーニング・復習など）を出す */}
     {wideLayout && (
       <div style={{ width: 360, flexShrink: 0, padding: "16px 0", alignSelf: "stretch" }}>
-        <LectureRangePanel tasks={tasks} subjectTodos={subjectTodos} subjects={subjects} date={selectedDate} />
+        <DayTodoPanel tasks={tasks} subjectTodos={subjectTodos} subjects={subjects} date={selectedDate} onToggle={toggleDone} />
       </div>
     )}
     </div>
