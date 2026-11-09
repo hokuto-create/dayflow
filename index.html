@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261109-3';
+  const APP_VERSION = '20261109-4';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -7611,7 +7611,7 @@ function RecoveryModal({ tasks, setTasks, subjects, goals, settings, monthlyPlan
   );
 }
 
-function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, setSyncEmail, syncStatus, lastSyncedAt, manualPull }) {
+function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, setSyncEmail, syncStatus, lastSyncedAt, manualPull, syncError, onRetrySync }) {
   const [local, setLocal] = useState({ dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true, recoveryThresholdHours: 6, oneProblemPerDay: true, ...settings });
   const [localEmail, setLocalEmail] = useState(syncEmail || "");
   const [confirmReset, setConfirmReset] = useState(false);
@@ -7648,8 +7648,17 @@ function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, set
                 </span>
               )}
               <div style={{ flex: 1 }} />
+              {syncStatus === "error" && (
+                <button onClick={onRetrySync}
+                  style={{ ...btn(false, C.red, { fontSize: 10, padding: "4px 8px" }) }}>↻ 再試行</button>
+              )}
               <button onClick={manualPull}
                 style={{ ...btn(false, C.blue, { fontSize: 10, padding: "4px 8px" }) }}>↓ 取得</button>
+            </div>
+          )}
+          {syncEmail && syncError && (
+            <div style={{ marginTop: 6, fontSize: 10, color: C.red, wordBreak: "break-all", userSelect: "text", WebkitUserSelect: "text" }}>
+              {syncError}
             </div>
           )}
         </div>
@@ -7798,17 +7807,24 @@ const STORAGE_KEY = "dayflow_v1";
 const SUPA_URL = "https://bspylkvejufqinglwfga.supabase.co";
 const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzcHlsa3ZlanVmcWluZ2x3ZmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MDc5MTAsImV4cCI6MjA5NTA4MzkxMH0.L9yyNoOQQ_hsBPAyut32d3rdgvW1W2mGffHRK2ZaH8w";
 
+// 失敗の理由を画面に出せる短い文にする
+async function describeHttpError(res) {
+  let body = "";
+  try { body = (await res.text()).slice(0, 200); } catch {}
+  return `HTTP ${res.status}${res.statusText ? " " + res.statusText : ""}${body ? "：" + body : ""}`;
+}
+// 取得。{ ok: true, row }（行が無ければ row: null）/ 失敗なら { ok: false, error }。
 async function cloudPull(email) {
-  if (!email) return null;
+  if (!email) return { ok: false, error: "メール未設定" };
   try {
     const res = await fetch(`${SUPA_URL}/rest/v1/dayflow_data?user_email=eq.${encodeURIComponent(email)}&select=data,updated_at`, {
       headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` },
       cache: "no-store",
     });
-    if (!res.ok) return null;
+    if (!res.ok) return { ok: false, error: "取得に失敗：" + await describeHttpError(res) };
     const rows = await res.json();
-    return rows[0] || null;
-  } catch (e) { console.error("pull failed", e); return null; }
+    return { ok: true, row: rows[0] || null };
+  } catch (e) { console.error("pull failed", e); return { ok: false, error: "取得に失敗（通信エラー）：" + (e && e.message || e) }; }
 }
 
 // クラウドの更新時刻だけを取る（軽い確認用）。行が無ければ 0、失敗したら null。
@@ -7825,11 +7841,13 @@ async function cloudUpdatedAt(email) {
   } catch (e) { console.error("check failed", e); return null; }
 }
 
-// 送信に成功したら、送った更新時刻（ミリ秒）を返す。失敗したら false。
+// 送信。{ ok: true, at }（送った更新時刻・ミリ秒）/ 失敗なら { ok: false, error }。
 async function cloudPush(email, data) {
-  if (!email) return false;
+  if (!email) return { ok: false, error: "メール未設定" };
+  const body = JSON.stringify({ user_email: email, data, updated_at: new Date().toISOString() });
+  const size = `${Math.round(body.length / 1024)}KB`;
   try {
-    const at = new Date().toISOString();
+    const at = JSON.parse(body).updated_at;
     const res = await fetch(`${SUPA_URL}/rest/v1/dayflow_data`, {
       method: "POST",
       headers: {
@@ -7837,10 +7855,11 @@ async function cloudPush(email, data) {
         "Content-Type": "application/json",
         Prefer: "resolution=merge-duplicates",
       },
-      body: JSON.stringify({ user_email: email, data, updated_at: at }),
+      body,
     });
-    return res.ok ? Date.parse(at) : false;
-  } catch (e) { console.error("push failed", e); return false; }
+    if (!res.ok) return { ok: false, error: `送信に失敗（${size}）：` + await describeHttpError(res) };
+    return { ok: true, at: Date.parse(at) };
+  } catch (e) { console.error("push failed", e); return { ok: false, error: `送信に失敗（${size}・通信エラー）：` + (e && e.message || e) }; }
 }
 
 function usePersistedState(key, initial) {
@@ -7898,6 +7917,8 @@ function App() {
   const [settings, setSettings] = usePersistedState("settings", { dayStartHour: 5, dayEndHour: 26, examDate: "", examLabel: "短答", scheduleMode: "auto", chunkBoundary: true, recoveryThresholdHours: 6, oneProblemPerDay: true });
   const [syncEmail, setSyncEmail] = usePersistedState("syncEmail", "");
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error
+  const [syncError, setSyncError] = useState("");       // 直近の失敗の理由（設定画面に表示）
+  const [syncRetry, setSyncRetry] = useState(0);        // 失敗時の再試行のきっかけ
   const [lastSyncedAt, setLastSyncedAt] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   // リカバリーモーダル: null=閉, { subjectId: null|科目ID }=開（科目IDありなら科目別プラン）
@@ -7905,7 +7926,7 @@ function App() {
   const openRecovery = (subjectId) => setShowRecovery({ subjectId: subjectId || null });
   // リカバリー適用前のスナップショット（1段階Undo・リロード後も保持）
   const [recoveryUndo, setRecoveryUndo] = usePersistedState("recoveryUndo", null);
-  const initialPulledRef = useRef(false);   // 初回取得を開始したか
+  const initialPulledRef = useRef(0);       // 初回取得を何回目まで開始したか（再試行の重複防止）
   const [pullDone, setPullDone] = useState(false); // 初回取得が終わったか（終わるまで送信しない）
   const lastPushedDataRef = useRef("");
   const cloudAtRef = useRef(0);             // 手元が把握しているクラウドの更新時刻（ミリ秒）
@@ -8032,23 +8053,29 @@ function App() {
     cloudAtRef.current = Date.parse(row.updated_at) || 0;
     setLastSyncedAt(Date.now());
   };
-  // クラウドから取得して反映する。取得できたら true。
+  // クラウドから取得して反映する。通信に成功したら true（クラウドに行が無い場合も true）。
   const pullNow = async () => {
-    const row = await cloudPull(syncEmail);
-    if (row && row.data) { applyCloudRow(row); return true; }
-    return false;
+    const r = await cloudPull(syncEmail);
+    if (!r.ok) { setSyncError(r.error); return false; }
+    if (r.row && r.row.data) applyCloudRow(r.row);
+    setSyncError("");
+    return true;
   };
+  // 失敗したら少し待って再試行させる
+  const scheduleRetry = () => setTimeout(() => setSyncRetry(n => n + 1), 15000);
 
   // Pull from cloud on initial load if email is set
+  // 取得に失敗したら「クラウドにデータが無い」とは扱わず、送信もしないで再試行する
+  // （通信エラーのまま手元の古いデータを送ってクラウドを上書きしないため）。
   useEffect(() => {
-    if (!syncEmail || initialPulledRef.current) return;
-    initialPulledRef.current = true;
+    if (!syncEmail || pullDone || initialPulledRef.current === syncRetry + 1) return;
+    initialPulledRef.current = syncRetry + 1;
     setSyncStatus("syncing");
-    pullNow().then(() => {
-      setPullDone(true);
-      setSyncStatus("synced");
+    pullNow().then(ok => {
+      if (ok) { setPullDone(true); setSyncStatus("synced"); }
+      else { setSyncStatus("error"); scheduleRetry(); }
     });
-  }, [syncEmail]);
+  }, [syncEmail, syncRetry]);
 
   // Push to cloud (debounced 3s) when data changes
   useEffect(() => {
@@ -8065,24 +8092,28 @@ function App() {
       const at = await cloudUpdatedAt(syncEmail);
       if (cancelled) return;
       if (at && at > cloudAtRef.current + 1000) {
-        await pullNow();
+        const ok = await pullNow();
         window.__dayflowPushPending = false;
-        setSyncStatus("synced");
+        setSyncStatus(ok ? "synced" : "error");
+        if (!ok) scheduleRetry();
         return;
       }
-      const pushedAt = await cloudPush(syncEmail, payload);
-      if (pushedAt) {
-        cloudAtRef.current = pushedAt;
+      const r = await cloudPush(syncEmail, payload);
+      if (r.ok) {
+        cloudAtRef.current = r.at;
         lastPushedDataRef.current = serialized;
         if (!cancelled) window.__dayflowPushPending = false;
+        setSyncError("");
         setLastSyncedAt(Date.now());
         setSyncStatus("synced");
       } else {
+        setSyncError(r.error);
         setSyncStatus("error");
+        scheduleRetry();
       }
     }, 3000);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [syncEmail, pullDone, tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, reviews, settings, subjectCategories]);
+  }, [syncEmail, pullDone, syncRetry, tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, reviews, settings, subjectCategories]);
 
   // アプリに戻ってきたら、クラウドが新しくなっていないか確かめて取り込む（送信待ちの間は見送る）
   useEffect(() => {
@@ -8095,8 +8126,8 @@ function App() {
         const at = await cloudUpdatedAt(syncEmail);
         if (at && at > cloudAtRef.current + 1000 && !window.__dayflowPushPending) {
           setSyncStatus("syncing");
-          await pullNow();
-          setSyncStatus("synced");
+          const ok = await pullNow();
+          setSyncStatus(ok ? "synced" : "error");
         }
       } finally { busy = false; }
     };
@@ -8112,8 +8143,8 @@ function App() {
   const manualPull = async () => {
     if (!syncEmail) return;
     setSyncStatus("syncing");
-    await pullNow();
-    setSyncStatus("synced");
+    const ok = await pullNow();
+    if (ok) { setPullDone(true); setSyncStatus("synced"); } else setSyncStatus("error");
   };
 
   // 夜（20時以降）に、今日タスクがあるのに今日の振り返りが未完了なら
@@ -8223,7 +8254,8 @@ function App() {
       </div>
 
       {showSettings && <SettingsModal settings={settings} setSettings={setSettings} onClose={() => setShowSettings(false)} onReset={resetAll}
-        syncEmail={syncEmail} setSyncEmail={setSyncEmail} syncStatus={syncStatus} lastSyncedAt={lastSyncedAt} manualPull={manualPull} />}
+        syncEmail={syncEmail} setSyncEmail={setSyncEmail} syncStatus={syncStatus} lastSyncedAt={lastSyncedAt} manualPull={manualPull}
+        syncError={syncError} onRetrySync={() => setSyncRetry(n => n + 1)} />}
       {showRecovery && <RecoveryModal tasks={tasks} setTasks={setTasks} subjects={subjects} goals={goals} settings={settings}
         monthlyPlans={monthlyPlans} weeklyPlans={weeklyPlans} setMonthlyPlans={setMonthlyPlans} setWeeklyPlans={setWeeklyPlans}
         delayStats={delayStats} initialSubjectId={showRecovery.subjectId} setRecoveryUndo={setRecoveryUndo} onClose={() => setShowRecovery(null)} />}
