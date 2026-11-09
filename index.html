@@ -366,6 +366,47 @@ function resyncPlanMarkers(placements, setMonthlyPlans, setWeeklyPlans) {
 // 赤チャート（趣味勉強>高校数学、subjectId が rc_ で始まる）のタスクか。
 function isRedChartTask(t) { return !!(t.subjectId && String(t.subjectId).startsWith("rc_")); }
 
+/* ── 赤チャート: 記録のみモード ──
+   赤チャートはいったんスケジュールに入れず、各問題が「1発で解けたか」だけを記録する。
+   ・TODOの firstTry: true=1発で解けた / false=1発では解けなかった / 未定義=未記録
+   ・記録しても復習タスク・練習タスクは作らない（間隔反復ラダーも使わない）
+   ・月/週/日への追加・自動分配も赤チャートでは使わない */
+const RC_RECORD_ONLY = true;
+const isRcRecordOnly = (subjectId) => RC_RECORD_ONLY && !!subjectId && String(subjectId).startsWith("rc_");
+
+// 記録のみモードへの移行（純関数）。
+// ・赤チャートの未完了タスク（例題・練習・復習すべて）をスケジュールから外す（完了済みの記録は残す）
+// ・赤チャートの月次・週次マーカーを外す
+// ・既に解いた問題の firstTry を履歴から判定する:
+//     マーク◎で、✖️以下の完了記録や復習タスクの完了が無ければ「1発で解けた」、
+//     それ以外（✖️/△/○、または途中で解けなかった記録あり）は「1発では解けなかった」。
+//   マークの無い問題は未記録のまま。判定済み（firstTry あり）の問題は変更しない。
+// 何度実行しても結果が変わらない（冪等）。
+function migrateRcRecordOnly({ tasks, subjectTodos, monthlyPlans, weeklyPlans }) {
+  const isRc = (x) => !!(x && x.subjectId && String(x.subjectId).startsWith("rc_"));
+  const tasksOut = tasks.filter(t => !(isRc(t) && !t.done));
+  const monthlyOut = monthlyPlans.filter(p => !isRc(p));
+  const weeklyOut = weeklyPlans.filter(p => !isRc(p));
+  let todoChanged = 0;
+  const todosOut = subjectTodos.map(td => {
+    if (!isRc(td) || td.firstTry !== undefined || !td.understanding) {
+      // 未記録の問題でも、残っている復習日は不要なので消す
+      if (isRc(td) && td.firstTry === undefined && td.reviewDue) { todoChanged++; return { ...td, reviewDue: null }; }
+      return td;
+    }
+    const failedOnce = td.understanding < 4 || tasks.some(t => t.subjectTodoId === td.id && t.done
+      && (t.isReview || (t.understanding && t.understanding < 4)));
+    todoChanged++;
+    return { ...td, firstTry: !failedOnce, reviewDue: null, status: "done", done: true };
+  });
+  return {
+    tasks: tasksOut, subjectTodos: todosOut, monthlyPlans: monthlyOut, weeklyPlans: weeklyOut,
+    removedTasks: tasks.length - tasksOut.length,
+    removedMarkers: (monthlyPlans.length - monthlyOut.length) + (weeklyPlans.length - weeklyOut.length),
+    todoChanged,
+  };
+}
+
 // 今日以降の赤チャートで「その日が埋まっている」扱いにする固定タスク:
 // 復習（間隔反復で日付が決まる）と、時刻を指定して手で置いたもの。
 function isFixedRcTask(t, today) {
@@ -412,6 +453,244 @@ function planOneProblemPerDay(tasks, today) {
     cursorBy.set(t.subjectId, addDays(d, 1));
   }
   return moves;
+}
+
+/* ── 会計士（CPA勉強）講義の受講計画 ──
+   2027年合格目標 2年L・S本科生（TAC札幌校）の講義日程表から作成。1講義=約3時間。
+   ・done: 受講済みの回数（先頭から。日程表でピンクに塗った回）
+   ・jitsu: 「実」の回の番号（番号の枠を1つ使う。例: 8→実→10 なら 9）
+   ・extra: 番号の後ろに続く回（財計入門の「補講」など）
+   ・dl: 受講期限 [[この回まで, 期限日], ...]（オレンジ線=11月末、緑線=12月末。財計は期限を設けない）
+   ・daily: true の科目は日曜を除き1日1コマずつ、未受講の回を順番に予定へ入れる
+     （startFrom があればその日から。財理・監査論は12月から受け始める）
+   ・fillOnJitsu: startFrom より前は、他の科目が「実」（実力テスト）の日にだけ1コマ受ける
+     （監査論: 11月は他科目の実力テストの日に受ける。実力テスト1回につき1コマ） */
+const CPA_NOV = "2026-11-30", CPA_DEC = "2026-12-31";
+const CPA_LECTURE_SUBJECTS = [
+  { id: "s_calc", name: "財計", color: "#d14545", daily: true, sections: [
+    { title: "入門", count: 6, jitsu: [6], extra: ["補講"], done: 7 },
+    { title: "基礎マスターⅠ", count: 19, jitsu: [9, 19], done: 1 },
+    { title: "基礎マスターⅡ", count: 16, jitsu: [9, 16] },
+    { title: "基礎マスターⅢ", count: 12, jitsu: [12] },
+    { title: "基礎マスターⅣ", count: 12, jitsu: [12] },
+    { title: "上級講義", count: 9 },
+    { title: "Web補講", count: 3 },
+  ] },
+  { id: "s_theory", name: "財理", color: "#3a9d6e", daily: true, startFrom: "2026-12-01", sections: [
+    { title: "入門", count: 14, dl: [[14, CPA_DEC]] },
+    { title: "上級講義", count: 22, dl: [[7, CPA_DEC]] },
+  ] },
+  { id: "s_mgmt", name: "管理会計", color: "#d4a528", daily: true, sections: [
+    { title: "入門", count: 9, jitsu: [9], done: 1, dl: [[9, CPA_NOV]] },
+    { title: "基礎マスター", count: 22, jitsu: [8, 15, 22], dl: [[8, CPA_NOV], [22, CPA_DEC]] },
+    { title: "上級講義", count: 11, dl: [[11, CPA_DEC]] },
+    { title: "Web補講", count: 3, dl: [[3, CPA_DEC]] },
+  ] },
+  { id: "s_law", name: "企業法", color: "#4a8ed1", daily: true, sections: [
+    { title: "入門基礎マスター", count: 20, dl: [[20, CPA_NOV]] },
+    { title: "上級講義", count: 12, dl: [[12, CPA_DEC]] },
+  ] },
+  { id: "s_audit", name: "監査論", color: "#3aa0d8", daily: true, startFrom: "2026-12-01", fillOnJitsu: true, sections: [
+    { title: "入門", count: 5, dl: [[5, CPA_NOV]] },
+    { title: "上級講義", count: 20, dl: [[20, CPA_DEC]] },
+  ] },
+];
+const CPA_LECTURE_MINUTES = 180;
+// 作り直しの版。内容を変えたら上げる（未実行・旧版の端末で一度だけ作り直しが走る）。
+const CPA_REBUILD_VERSION = 3;
+
+// 講義TODO（区分=親、各回=子）を作る。子は isLecture: true（解けた/解けなかったは使わない）。
+function buildCpaLectureTodos() {
+  const out = [];
+  let seq = 0;
+  CPA_LECTURE_SUBJECTS.forEach(subj => {
+    subj.sections.forEach(sec => {
+      const pid = genId();
+      const allDone = (sec.done || 0) >= sec.count + (sec.extra || []).length;
+      out.push({ id: pid, subjectId: subj.id, text: sec.title, minutes: null,
+        status: allDone ? "done" : "unwatched", done: allDone, track: "video", createdAt: ++seq });
+      const labels = [];
+      for (let n = 1; n <= sec.count; n++) labels.push({ n, text: (sec.jitsu || []).includes(n) ? `第${n}回 実` : `第${n}回` });
+      (sec.extra || []).forEach(x => labels.push({ n: null, text: x }));
+      labels.forEach((l, i) => {
+        const done = i < (sec.done || 0);
+        const dl = l.n != null ? ((sec.dl || []).find(([upTo]) => l.n <= upTo) || [])[1] || null : null;
+        out.push({ id: genId(), subjectId: subj.id, parentId: pid, text: l.text,
+          minutes: CPA_LECTURE_MINUTES, status: done ? "done" : "unwatched", done,
+          track: "video", isLecture: true, deadline: dl, createdAt: ++seq });
+      });
+    });
+  });
+  return out;
+}
+
+// 財計の講義とトレーニング・ミニテストの対応（TAC 財計 復習管理表より）。[区分, 回, [問題...]]
+// 問題は表の上から順（トレーニング → 最後にその回のミニテスト）。
+// 「実」の回（実力テスト）にはトレーニングがない。上級の補講分は Web補講 第3回にまとめて付ける。
+const CPA_CALC_TRAININGS = [
+  ["基礎マスターⅠ", 1, ["トレ① 2-1", "トレ① 2-2", "トレ① 2-3", "トレ① 2-4", "トレ① 2-5", "トレ① 2-6", "トレ①短 2-1", "ミニテスト①"]],
+  ["基礎マスターⅠ", 2, ["トレ① 3-1", "トレ① 3-2", "ミニテスト②"]],
+  ["基礎マスターⅠ", 3, ["トレ① 4-1", "トレ① 4-2", "トレ① 4-3", "トレ① 4-4", "トレ① 4-5", "トレ① 4-6", "トレ①短 4-1", "ミニテスト③"]],
+  ["基礎マスターⅠ", 4, ["トレ① 4-7", "トレ① 4-8", "トレ① 4-9", "トレ① 4-10", "トレ① 4-11", "トレ② 1-1", "トレ①短 4-2", "ミニテスト④"]],
+  ["基礎マスターⅠ", 5, ["トレ② 1-2", "トレ② 1-3", "トレ② 1-4", "トレ② 1-5", "トレ② 1-6", "トレ② 1-7", "トレ②短 1-1", "ミニテスト⑤"]],
+  ["基礎マスターⅠ", 6, ["トレ② 1-8", "トレ② 1-9", "トレ② 2-1", "トレ②短 1-2", "ミニテスト⑥"]],
+  ["基礎マスターⅠ", 7, ["トレ② 2-2", "トレ② 2-3", "トレ② 2-4", "トレ② 2-5", "トレ② 2-6", "トレ② 2-7", "トレ② 2-8", "ミニテスト⑦"]],
+  ["基礎マスターⅠ", 8, ["トレ② 2-9", "トレ② 2-10", "トレ② 2-11", "トレ② 2-12", "トレ② 2-13", "トレ② 2-14", "トレ② 3-1", "トレ② 4-1", "トレ② 4-2", "トレ②短 2-1", "トレ②短 2-2"]],
+  ["基礎マスターⅠ", 10, ["トレ③ 1-1", "トレ③ 1-2", "トレ③短 1-1", "トレ③短 1-2", "ミニテスト⑧"]],
+  ["基礎マスターⅠ", 11, ["トレ③ 1-3", "トレ③ 1-4", "トレ③ 1-5", "トレ② 6-1", "トレ② 6-2", "トレ③短 1-3", "トレ③短 1-4", "ミニテスト⑨"]],
+  ["基礎マスターⅠ", 12, ["トレ② 6-3", "トレ② 6-4", "トレ② 6-5", "トレ② 6-6", "トレ② 6-7", "トレ② 8-1", "トレ② 8-2", "トレ②短 6-1", "トレ②短 6-2", "トレ②短 6-3", "トレ②短 8-1", "ミニテスト⑩"]],
+  ["基礎マスターⅠ", 13, ["トレ② 8-3", "トレ① 6-1", "トレ① 6-2", "トレ① 6-3", "トレ① 6-4", "トレ① 6-5", "トレ①短 6-1", "トレ①短 6-2", "ミニテスト⑪"]],
+  ["基礎マスターⅠ", 14, ["トレ② 11-1", "トレ① 11-1", "トレ① 12-1", "トレ① 12-2", "トレ① 12-3", "トレ① 12-4", "トレ①短 11-1", "トレ①短 12-1", "ミニテスト⑫"]],
+  ["基礎マスターⅠ", 15, ["トレ① 12-5", "トレ① 12-6", "トレ① 7-1", "トレ① 7-2", "トレ① 7-3", "トレ①短 7-1", "トレ①短 7-2", "トレ①短 12-2", "トレ①短 12-3", "ミニテスト⑬"]],
+  ["基礎マスターⅠ", 16, ["トレ① 7-4", "トレ① 7-5", "トレ① 7-6", "トレ③ 6-1", "トレ①短 7-3", "ミニテスト⑭"]],
+  ["基礎マスターⅠ", 17, ["トレ③ 6-2", "トレ③ 7-1", "トレ③ 7-2", "トレ③ 8-1", "トレ③ 8-2", "ミニテスト⑮"]],
+  ["基礎マスターⅠ", 18, ["トレ③ 9-1", "トレ③ 9-2", "トレ③ 10-1", "トレ③ 11-1", "トレ③ 11-2", "トレ② 5-1", "トレ③短 10-1", "トレ③短 10-2", "トレ③短 11-1", "トレ②短 5-1"]],
+  ["基礎マスターⅡ", 1, ["トレ④ 5-1", "ミニテスト①"]],
+  ["基礎マスターⅡ", 2, ["トレ④ 5-2", "トレ④ 5-3", "トレ④ 5-4", "トレ④ 5-5", "ミニテスト②"]],
+  ["基礎マスターⅡ", 3, ["トレ④ 5-6", "トレ④ 5-7", "トレ④ 6-1", "トレ④ 7-1", "トレ④ 8-1", "トレ④短 7-1", "トレ④短 8-1", "ミニテスト③"]],
+  ["基礎マスターⅡ", 4, ["トレ④ 9-1", "トレ④ 9-2", "トレ④ 9-3", "トレ④短 9-1", "トレ④ 11-1", "トレ④ 11-2", "トレ④ 11-3", "ミニテスト④"]],
+  ["基礎マスターⅡ", 5, ["トレ④ 11-4", "トレ④ 11-5", "トレ④短 11-1", "ミニテスト⑤"]],
+  ["基礎マスターⅡ", 6, ["トレ④ 11-6", "トレ④ 11-7", "トレ④ 11-8", "ミニテスト⑥"]],
+  ["基礎マスターⅡ", 7, ["トレ④ 12-1", "トレ④ 12-2", "トレ④ 12-3", "トレ④ 12-4", "トレ④短 12-1", "ミニテスト⑦"]],
+  ["基礎マスターⅡ", 8, ["トレ④ 13-1", "トレ④ 13-2", "トレ④ 13-3", "トレ④ 13-4", "トレ④ 13-5", "トレ④ 13-6", "トレ④ 13-7", "トレ④ 13-8", "トレ④ 13-9", "トレ④短 13-1", "トレ④短 13-2"]],
+  ["基礎マスターⅡ", 10, ["トレ④ 1-1", "トレ④ 1-2", "トレ④ 1-3", "トレ④ 1-4", "トレ④短 1-1", "ミニテスト⑧"]],
+  ["基礎マスターⅡ", 11, ["トレ④ 1-5", "トレ④ 1-6", "トレ④ 1-7", "トレ④短 1-2", "ミニテスト⑨"]],
+  ["基礎マスターⅡ", 12, ["トレ⑦ 1-1", "トレ⑦ 1-2", "トレ⑦ 1-3", "トレ⑦ 1-4", "トレ⑦ 2-1", "トレ⑦ 2-2", "トレ⑦短 2-1", "トレ⑦短 2-2", "ミニテスト⑩"]],
+  ["基礎マスターⅡ", 13, ["トレ⑦ 8-1", "トレ⑦ 8-2", "トレ⑦ 8-3", "トレ⑦短 8-1", "ミニテスト⑪"]],
+  ["基礎マスターⅡ", 14, ["トレ⑦ 8-4", "トレ⑦ 8-5", "トレ⑦ 8-6", "ミニテスト⑫"]],
+  ["基礎マスターⅡ", 15, ["トレ⑦ 8-7", "トレ⑦ 8-8", "トレ⑦ 8-9", "トレ⑦ 8-10", "トレ⑦ 8-11", "トレ⑦ 8-12", "トレ⑦短 8-2"]],
+  ["基礎マスターⅢ", 1, ["トレ③ 4-1", "トレ③ 4-2", "トレ③短 4-1", "トレ③短 4-2", "ミニテスト①"]],
+  ["基礎マスターⅢ", 2, ["トレ③ 5-1", "トレ③ 5-2", "トレ③ 5-3", "トレ③ 5-4", "トレ③短 5-1", "トレ③短 5-2", "ミニテスト②"]],
+  ["基礎マスターⅢ", 3, ["トレ③ 14-1", "トレ③ 14-2", "ミニテスト③"]],
+  ["基礎マスターⅢ", 4, ["トレ③ 14-3", "トレ③ 14-4", "トレ③短 14-1", "ミニテスト④"]],
+  ["基礎マスターⅢ", 5, ["トレ② 12-1", "ミニテスト⑤"]],
+  ["基礎マスターⅢ", 6, ["トレ② 12-2", "トレ② 12-3", "トレ② 12-4", "トレ② 12-5", "トレ②短 12-1", "ミニテスト⑥"]],
+  ["基礎マスターⅢ", 7, ["トレ① 5-1", "トレ① 5-2", "トレ③ 12-1", "トレ③ 13-1", "トレ③短 13-1", "トレ③短 13-2", "ミニテスト⑦"]],
+  ["基礎マスターⅢ", 8, ["トレ③ 13-2", "トレ③短 13-3", "ミニテスト⑧"]],
+  ["基礎マスターⅢ", 9, ["トレ① 9-1", "トレ① 10-1", "トレ① 8-1", "トレ①短 10-1", "トレ①短 8-1", "ミニテスト⑨"]],
+  ["基礎マスターⅢ", 10, ["トレ① 10-2", "トレ②短 9-1", "トレ②短 9-2", "ミニテスト⑩"]],
+  ["基礎マスターⅢ", 11, ["トレ② 10-1", "トレ② 10-2", "トレ② 10-3", "トレ②短 9-3", "トレ②短 10-1"]],
+  ["基礎マスターⅣ", 1, ["トレ⑤ 2-1", "トレ⑤ 2-2", "トレ⑤ 4-1", "トレ⑤ 4-2", "トレ⑤ 4-3", "トレ⑤ 4-4", "ミニテスト①"]],
+  ["基礎マスターⅣ", 2, ["トレ⑤ 4-5", "トレ⑤ 4-6", "トレ⑤ 4-7", "トレ⑤ 4-8", "トレ⑤ 4-9", "トレ⑤ 4-10", "トレ⑤ 4-11", "トレ⑤ 6-1", "トレ⑤ 7-1", "トレ⑤短 4-1", "トレ⑤短 4-2", "トレ⑤短 7-1", "ミニテスト②"]],
+  ["基礎マスターⅣ", 3, ["トレ⑤ 8-1", "トレ⑤ 9-1", "トレ⑤ 10-1", "トレ⑤ 11-1", "ミニテスト③"]],
+  ["基礎マスターⅣ", 4, ["トレ⑤ 13-1", "トレ⑥ 2-1", "トレ⑥ 2-2", "トレ⑤短 13-1", "ミニテスト④"]],
+  ["基礎マスターⅣ", 5, ["トレ⑥ 2-3", "トレ⑥ 3-1", "ミニテスト⑤"]],
+  ["基礎マスターⅣ", 6, ["トレ⑥ 4-1", "トレ⑥ 4-2", "トレ⑥ 5-1", "トレ⑥短 4-1", "トレ⑥短 4-2", "ミニテスト⑥"]],
+  ["基礎マスターⅣ", 7, ["トレ⑥ 6-1", "トレ⑥ 6-2", "トレ⑥短 6-1", "トレ⑥短 6-2", "トレ⑥短 6-3", "ミニテスト⑦"]],
+  ["基礎マスターⅣ", 8, ["トレ⑥ 7-1", "トレ⑥ 7-2", "トレ⑥ 7-3", "トレ⑦ 3-1", "トレ⑦ 3-2", "トレ⑦ 3-3", "トレ⑥短 7-1", "トレ⑦短 3-1", "トレ⑦短 3-2", "ミニテスト⑧"]],
+  ["基礎マスターⅣ", 9, ["トレ⑦ 3-4", "トレ⑦ 3-5", "トレ⑦ 4-1", "トレ⑦ 4-2", "トレ⑦短 3-3", "トレ⑦短 4-2", "ミニテスト⑨"]],
+  ["基礎マスターⅣ", 10, ["トレ⑦ 4-3", "トレ⑦ 4-4", "トレ⑦ 4-5", "トレ⑦ 4-6", "トレ⑦短 4-1", "ミニテスト⑩"]],
+  ["基礎マスターⅣ", 11, ["トレ⑦ 4-7", "トレ⑦ 4-8", "トレ⑦ 9-1", "トレ⑦ 9-2", "トレ⑦短 9-1", "トレ⑦短 9-2"]],
+  ["上級講義", 1, ["トレ② 7-1", "トレ② 7-2", "トレ② 7-3", "トレ③ 3-1", "トレ②短 7-1", "ミニテスト①"]],
+  ["上級講義", 2, ["トレ③ 2-1", "トレ③ 2-2", "トレ① 13-1", "トレ③短 2-1", "トレ①短 13-1", "ミニテスト②"]],
+  ["上級講義", 3, ["トレ⑤ 12-1", "トレ⑤ 12-2", "トレ⑤ 12-3", "トレ⑤短 12-1", "トレ⑤ 3-1", "ミニテスト③"]],
+  ["上級講義", 4, ["トレ⑤ 5-1", "トレ① 14-1", "トレ①短 14-1", "ミニテスト④"]],
+  ["上級講義", 5, ["トレ② 13-1", "トレ③ 16-1", "トレ③ 16-2", "トレ③ 16-3", "トレ③ 16-4", "トレ②短 13-1", "トレ③短 16-1", "ミニテスト⑤"]],
+  ["上級講義", 6, ["トレ⑦ 7-1", "トレ⑦ 7-2", "トレ⑦短 5-1", "トレ⑦短 7-1", "ミニテスト⑥"]],
+  ["上級講義", 7, ["トレ⑦ 6-1", "トレ⑦ 6-2", "ミニテスト⑦"]],
+  ["上級講義", 8, ["トレ⑦ 10-1", "トレ⑦ 10-2", "トレ⑦ 10-3", "トレ⑦短 10-1", "トレ⑦短 10-2", "トレ⑦短 10-3", "トレ⑥短 9-1", "トレ⑥短 9-2", "ミニテスト⑧"]],
+  ["上級講義", 9, ["トレ⑤ 15-1", "トレ⑤ 16-1", "トレ⑥ 8-1", "トレ⑥ 8-2"]],
+  ["Web補講", 3, ["トレ⑧ 1-1", "トレ⑧ 1-2", "トレ⑧ 3-1", "トレ⑧ 3-2", "トレ⑧ 4-1", "トレ⑧ 4-2", "トレ⑧ 5-1", "トレ⑧ 6-1", "トレ⑧ 6-2", "トレ⑧ 6-3", "トレ⑧ 7-1", "トレ⑧ 8-1", "トレ⑧ 8-2", "トレ⑧ 9-1", "トレ⑧ 9-2", "トレ⑧ 9-3", "トレ⑧ 10-1", "トレ⑧ 11-1", "トレ⑧ 11-2", "トレ⑧ 12-1", "トレ⑧ 13-1", "トレ⑧短 2-1", "トレ⑧短 3-1", "トレ⑧短 6-1", "トレ⑧短 7-1", "トレ⑧短 8-1", "トレ⑧短 9-1"]],
+];
+const CPA_TRAINING_MINUTES = 15; // トレーニング・ミニテスト1問の目安（分）
+// 作り直し前に解いた結果（ラダーの初期状態）。[区分, 回, 問題, 解けたか]
+// 解けた → ◎（復習不要）、解けなかった → ✖️（翌日復習。復習タスクも入れる）。
+const CPA_CALC_INITIAL_RESULTS = [
+  ["基礎マスターⅠ", 1, "トレ① 2-1", true],
+  ["基礎マスターⅠ", 1, "トレ① 2-2", true],
+  ["基礎マスターⅠ", 1, "トレ① 2-3", true],
+  ["基礎マスターⅠ", 1, "トレ① 2-4", true],
+  ["基礎マスターⅠ", 1, "トレ① 2-5", true],
+  ["基礎マスターⅠ", 1, "トレ① 2-6", false],
+  ["基礎マスターⅠ", 1, "トレ①短 2-1", true],
+];
+const CPA_INITIAL_RESULT_DATE = "2026-11-09"; // 上の結果を記録した日
+
+// 財計のトレーニングTODOを作る（トレーニングタブ: 講義の回=親、問題=子）。
+// 親は「基礎マスターⅠ 第1回」…「基礎マスターⅡ 第1回」…と講義順に並ぶ（上級の補講分は「Web補講」）。
+// 子は lectureTodoId で対応する講義の回を指す。todos には財計の講義TODOを含む配列を渡す。
+function buildCpaTrainingTodos(todos) {
+  const out = [];
+  let seq = 0;
+  CPA_CALC_TRAININGS.forEach(([secTitle, n, items]) => {
+    const sec = todos.find(t => t.subjectId === "s_calc" && !t.parentId && (t.track || "video") === "video" && t.text === secTitle);
+    const lec = sec && todos.find(t => t.parentId === sec.id && t.isLecture && new RegExp(`^第${n}回`).test(t.text));
+    const pid = genId();
+    out.push({ id: pid, subjectId: "s_calc", text: secTitle === "Web補講" ? secTitle : `${secTitle} 第${n}回`,
+      minutes: null, status: "unwatched", done: false, track: "training", createdAt: ++seq });
+    items.forEach(item => {
+      // ミニテストは区分ごとに①から振り直されるので、予定のタイトル用に区分名を付ける
+      const problem = /^ミニテスト/.test(item) ? `${secTitle} ${item}` : item;
+      const init = CPA_CALC_INITIAL_RESULTS.find(([sec, no, it]) => sec === secTitle && no === n && it === item);
+      const r = init ? srApply(0, init[3], CPA_INITIAL_RESULT_DATE) : null;
+      out.push({ id: genId(), subjectId: "s_calc", parentId: pid, text: item, problem,
+        minutes: CPA_TRAINING_MINUTES, track: "training",
+        ...(r ? { understanding: r.understanding, reviewDue: r.reviewDue,
+                  status: r.understanding >= 4 ? "done" : "reviewing", done: r.understanding >= 4 }
+              : { status: "unwatched", done: false }),
+        lectureTodoId: lec ? lec.id : null, createdAt: ++seq });
+    });
+  });
+  return out;
+}
+
+// 講義を受講した日に、その回のトレーニングを予定へ入れる（1回目を解く）。
+// まだ解いていない（未完了・マーク無し）で、未完了の予定も無い問題だけを対象にする。
+function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date) {
+  if (!lectureTodoId) return [];
+  const subjName = (CPA_LECTURE_SUBJECTS.find(x => x.id === "s_calc") || {}).name || "財計";
+  const pending = new Set(tasks.filter(t => !t.done && t.subjectTodoId).map(t => t.subjectTodoId));
+  return subjectTodos
+    .filter(t => t.lectureTodoId === lectureTodoId && !t.done && !t.understanding && !pending.has(t.id))
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+    .map(t => ({
+      id: genId(), date, title: `${subjName} ${t.problem || t.text}`,
+      hour: null, duration: (t.minutes || CPA_TRAINING_MINUTES) / 60, priority: "medium",
+      actual: null, done: false, note: "", goalId: null,
+      kind: "study", subjectId: t.subjectId, subjectTodoId: t.id, originalDate: date,
+    }));
+}
+
+// daily な科目の未受講の回を、start（科目に startFrom があれば遅い方）から
+// 日曜を除いて1日1コマずつ順番に置く。
+// 返り値: 予定タスクの配列（科目ごとに独立して並べるので、同じ日に複数科目が並ぶ）。
+function scheduleCpaLectures(todos, start) {
+  const out = [];
+  CPA_LECTURE_SUBJECTS.filter(s => s.daily).forEach(subj => {
+    const parents = todos.filter(t => t.subjectId === subj.id && !t.parentId)
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    let d = subj.startFrom && subj.startFrom > start ? subj.startFrom : start;
+    // 開始日より前の「他科目の実力テストの日」（先に並べた科目の予定から拾う。テスト1回につき1枠）
+    const jitsuDays = subj.fillOnJitsu
+      ? out.filter(t => / 実$/.test(t.title) && t.date >= start && t.date < d).map(t => t.date).sort()
+      : [];
+    parents.forEach(p => {
+      todos.filter(c => c.parentId === p.id && !c.done && c.isLecture)
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).forEach(c => {
+        if (jitsuDays.length) {
+          const jd = jitsuDays.shift();
+          out.push({
+            id: genId(), date: jd, title: `${subj.name} ${p.text} ${c.text}`,
+            hour: null, duration: CPA_LECTURE_MINUTES / 60, priority: "medium",
+            actual: null, done: false, note: "", goalId: null,
+            kind: "study", subjectId: subj.id, subjectTodoId: c.id,
+            isLecture: true, originalDate: jd,
+          });
+          return;
+        }
+        while (new Date(d + "T00:00:00").getDay() === 0) d = addDays(d, 1);
+        out.push({
+          id: genId(), date: d, title: `${subj.name} ${p.text} ${c.text}`,
+          hour: null, duration: CPA_LECTURE_MINUTES / 60, priority: "medium",
+          actual: null, done: false, note: "", goalId: null,
+          kind: "study", subjectId: subj.id, subjectTodoId: c.id,
+          isLecture: true, originalDate: d,
+        });
+        d = addDays(d, 1);
+      });
+    });
+  });
+  return out;
 }
 
 /* ── INITIAL DATA ── */
@@ -1518,6 +1797,9 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const [extraDates, setExtraDates] = useState([]); // additional dates for bulk add
   const [showBulk, setShowBulk] = useState(false);
   const [understandingModal, setUnderstandingModal] = useState(null); // task being completed
+  // 講義を受講済みにした直後の「復習したい例題」登録モーダル（対象の講義タスク）
+  const [lectureExModal, setLectureExModal] = useState(null);
+  const [lectureExText, setLectureExText] = useState("");
   const [solveMinutes, setSolveMinutes] = useState(""); // 完了モーダルで入力する「かかった時間（分）」
   const [scheduleModal, setScheduleModal] = useState(null); // unscheduled task to schedule
   const [hourPickerOpen, setHourPickerOpen] = useState(false); // grid picker for form's start time
@@ -1610,6 +1892,20 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   // 間隔反復ラダー: 解けた(solved=true)/解けなかった(false)でマークを1段進める。
   const completeWithUnderstanding = (task, solved, minutes) => {
     const base = todayStr(); // 「その段階になった日」を起点に次回復習日を決める
+    // 赤チャート（記録のみモード）: 1発で解けたかだけ記録し、復習・練習は作らない。
+    if (isRcRecordOnly(task.subjectId)) {
+      const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
+      setTasks(ts => ts
+        .map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString(), timeSpent: spent } : t)
+        .filter(t => t.id === task.id || !(t.subjectTodoId && t.subjectTodoId === task.subjectTodoId && !t.done)));
+      if (task.subjectTodoId) {
+        setSubjectTodos(sts => sts.map(s => s.id === task.subjectTodoId
+          ? { ...s, firstTry: s.firstTry !== undefined ? s.firstTry : solved, status: "done", done: true, reviewDue: null } : s));
+      }
+      setUnderstandingModal(null);
+      setSolveMinutes("");
+      return;
+    }
     // 現在のマークは紐づくTODO（なければタスク）から取得して1段進める
     let cur = task.understanding || 0;
     if (task.subjectTodoId) {
@@ -1720,9 +2016,62 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       setTasks(ts => ts.map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString() } : t));
       return;
     }
+    // 講義はチェックだけで受講済みにする（解けた/解けなかったは聞かない）
+    if (task.isLecture) {
+      // その回のトレーニングを今日の予定に入れる（受講した当日に1回解く）
+      setTasks(ts => [
+        ...ts.map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString() } : t),
+        ...trainingTasksForLecture(task.subjectTodoId, subjectTodos, ts, todayStr()),
+      ]);
+      if (task.subjectTodoId) {
+        setSubjectTodos(sts => sts.map(s => s.id === task.subjectTodoId ? { ...s, status: "done", done: true } : s));
+      }
+      setLectureExText("");
+      setLectureExModal({ ...task, trainingCount: trainingTasksForLecture(task.subjectTodoId, subjectTodos, tasks, todayStr()).length });
+      return;
+    }
     // Open understanding modal
     setSolveMinutes("");
     setUnderstandingModal(task);
+  };
+
+  // 講義で「復習した方がいい例題」を登録する（1行1題）。
+  // 例題タブ（track:"example"）の、講義と同じ区分名の親（なければ作る）の子として追加し、
+  // ✖️（翌日復習）から間隔反復ラダーに乗せる。翌日の復習タスクも入れる。
+  const LECTURE_EX_MINUTES = 15; // 例題1題の復習時間の目安（分）
+  const saveLectureExamples = () => {
+    const task = lectureExModal;
+    const lines = lectureExText.split(/\n/).map(x => x.trim()).filter(Boolean);
+    setLectureExModal(null);
+    setLectureExText("");
+    if (!task || lines.length === 0) return;
+    const lec = subjectTodos.find(x => x.id === task.subjectTodoId);
+    const sec = lec && lec.parentId ? subjectTodos.find(x => x.id === lec.parentId) : null;
+    const secTitle = sec ? sec.text : "講義";
+    const base = todayStr();
+    const due = addDays(base, SR_INTERVAL[1]);
+    let parent = subjectTodos.find(x => x.subjectId === task.subjectId && !x.parentId && x.track === "example" && x.text === secTitle);
+    const newTodos = [];
+    if (!parent) {
+      parent = { id: genId(), subjectId: task.subjectId, text: secTitle, minutes: null,
+        status: "unwatched", done: false, track: "example", createdAt: Date.now() };
+      newTodos.push(parent);
+    }
+    const lecLabel = lec ? lec.text : "";
+    const exTodos = lines.map((line, i) => ({
+      id: genId(), subjectId: task.subjectId, parentId: parent.id, text: line,
+      minutes: LECTURE_EX_MINUTES, status: "reviewing", done: false, track: "example",
+      understanding: 1, reviewDue: due, fromLecture: task.subjectTodoId || null,
+      note: lecLabel ? `${secTitle} ${lecLabel}` : "", createdAt: Date.now() + i,
+    }));
+    setSubjectTodos(sts => [...sts, ...newTodos, ...exTodos]);
+    setTasks(ts => [...ts, ...exTodos.map(e => ({
+      id: genId(), date: due, title: `復習: ${secTitle} ${e.text}`,
+      hour: null, duration: LECTURE_EX_MINUTES / 60, priority: "high",
+      actual: null, done: false, note: "", goalId: null,
+      kind: "study", subjectId: task.subjectId, subjectTodoId: e.id,
+      isReview: true, reviewOf: task.id, originalDate: due,
+    }))]);
   };
 
   const startEdit = (t) => {
@@ -2620,16 +2969,52 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         </div>
       )}
 
+      {/* 講義の受講後: 復習したい例題の登録（空のままなら何もしない） */}
+      {lectureExModal && (
+        <div style={{
+          position: "fixed", inset: 0, background: "#0008", zIndex: 100,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+        }} onClick={() => { setLectureExModal(null); setLectureExText(""); }}>
+          <div style={{ ...card({ maxWidth: 380, width: "100%" }) }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 4 }}>✓ 受講済みにしました</div>
+            <div style={{ fontSize: 14, color: C.text, marginBottom: 10 }}>{lectureExModal.title}</div>
+            {lectureExModal.trainingCount > 0 && (
+              <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, marginBottom: 10 }}>
+                📝 この回のトレーニング {lectureExModal.trainingCount}問を今日の予定に入れました
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>
+              復習した方がいい例題があれば1行に1題ずつ入力してください（例：例題12）。明日から復習に入ります。
+            </div>
+            <textarea value={lectureExText} onChange={e => setLectureExText(e.target.value)}
+              rows={4} placeholder={"例題3\n例題7 のれんの償却"} autoFocus
+              style={{ ...input({ width: "100%", boxSizing: "border-box", resize: "vertical", marginBottom: 12, fontFamily: font }) }} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => { setLectureExModal(null); setLectureExText(""); }}
+                style={{ ...btn(false, C.textMid, { flex: 1, padding: "9px" }) }}>なし</button>
+              <button onClick={saveLectureExamples} disabled={!lectureExText.trim()}
+                style={{ ...btn(true, C.accent, { flex: 2, padding: "9px", opacity: lectureExText.trim() ? 1 : 0.5 }) }}>
+                {(() => { const n = lectureExText.split(/\n/).filter(x => x.trim()).length; return n ? `${n}題を登録` : "登録"; })()}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 完了時の記録（間隔反復ラダー: 解けた/解けなかった） */}
       {understandingModal && (() => {
         const t = understandingModal;
         const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
         const td = t.subjectTodoId ? subjectTodos.find(x => x.id === t.subjectTodoId) : null;
         const cur = (td ? td.understanding : t.understanding) || 0;
-        const curInfo = SR_MARK[cur];
+        const rcOnly = isRcRecordOnly(t.subjectId);
+        const curInfo = rcOnly ? null : SR_MARK[cur];
         const okNext = SR_MARK[srApply(cur, true, todayStr()).understanding];
         const ngNext = SR_MARK[srApply(cur, false, todayStr()).understanding];
-        const CHOICES = [
+        const CHOICES = rcOnly ? [
+          { solved: true,  title: "1発で解けた",   sub: "記録のみ", color: C.green },
+          { solved: false, title: "解けなかった", sub: "記録のみ", color: C.red },
+        ] : [
           { solved: true,  title: "解けた",       sub: `→ ${okNext.mark}（${okNext.label}）`, color: C.green },
           { solved: false, title: "解けなかった", sub: `→ ${ngNext.mark}（${ngNext.label}）`, color: C.red },
         ];
@@ -2645,7 +3030,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               <div style={{ fontSize: 14, color: C.text, marginBottom: 4 }}>{t.title}</div>
               <div style={{ fontSize: 11, color: C.textMid, marginBottom: 14 }}>
                 {subjData && <span style={{ color: subjData.color }}>📚 {subjData.name}　</span>}
-                現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}
+                {rcOnly ? "1発で解けたかを記録します" : <>現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}</>}
               </div>
               {/* かかった時間（分）。任意入力。クイック選択 + 手入力。 */}
               <div style={{ marginBottom: 14 }}>
@@ -3852,6 +4237,15 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
 
   const setStatus = (id, status) => {
     setSubjectTodos(ts => ts.map(t => t.id === id ? { ...t, status, done: status === "done" } : t));
+    // 講義を受講済みにしたら、予定に入っている同じ回のタスクも完了にする
+    const todo = subjectTodos.find(t => t.id === id);
+    if (todo && todo.isLecture && status === "done") {
+      const stamp = new Date().toISOString();
+      setTasks(ts => [
+        ...ts.map(t => t.subjectTodoId === id && !t.done ? { ...t, done: true, doneAt: stamp } : t),
+        ...trainingTasksForLecture(id, subjectTodos, ts, todayStr()),
+      ]);
+    }
   };
 
   // 間隔反復ラダー: 解けた/解けなかったでマークを1段進め、次回復習日を設定する。
@@ -3860,6 +4254,29 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     const base = todayStr();
     const todo = subjectTodos.find(t => t.id === id);
     if (!todo) return;
+    // 赤チャート（記録のみモード）: 「1発で解けたか」だけを記録する。
+    // 振り返りに出るよう当日の完了記録は残すが、復習・練習の予定は作らない。
+    if (isRcRecordOnly(todo.subjectId)) {
+      const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
+      const stamp = new Date().toISOString();
+      setSubjectTodos(ts => ts.map(t => t.id === id
+        ? { ...t, firstTry: solved, status: "done", done: true, reviewDue: null } : t));
+      setTasks(ts => {
+        const existing = ts.find(t => t.subjectTodoId === id && t.date === base);
+        const taskId = existing ? existing.id : genId();
+        const next = existing
+          ? ts.map(t => t.id === existing.id ? { ...t, done: true, doneAt: stamp, timeSpent: spent } : t)
+          : [...ts, {
+              id: taskId, date: base, title: taskTitleFor(todo),
+              hour: null, duration: todoDuration(todo), priority: "medium",
+              actual: null, done: true, doneAt: stamp, timeSpent: spent, note: "",
+              goalId: null, kind: "study", subjectId: todo.subjectId, subjectTodoId: id,
+              originalDate: base,
+            }];
+        return next.filter(t => t.id === taskId || !(t.subjectTodoId === id && !t.done));
+      });
+      return;
+    }
     const r = srApply(todo.understanding, solved, base);
     const done = r.understanding >= 4; // ◎=復習不要=完了扱い
     setSubjectTodos(ts => ts.map(t => t.id === id
@@ -3897,6 +4314,14 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         isReview: true, reviewOf: taskId, originalDate: r.reviewDue,
       }];
     });
+  };
+  // 赤チャート: 「1発で解けたか」の記録を消して未記録に戻す。
+  const resetFirstTry = (id) => {
+    setSubjectTodos(ts => ts.map(t => {
+      if (t.id !== id) return t;
+      const { firstTry, ...rest } = t;
+      return { ...rest, status: "unwatched", done: false, understanding: null, reviewDue: null };
+    }));
   };
   // マークを直接指定する手動上書き（同じマーク再タップで解除）。
   const setUnderstanding = (id, level) => {
@@ -4582,10 +5007,12 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   ☑ 複数選択
                 </button>
                 <div style={{ flex: 1 }} />
+                {!isRcRecordOnly(activeSubject) && (
                 <button onClick={() => openAutoDist(parentTodos.map(t => t.id))}
                   style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px", whiteSpace: "nowrap" }) }}>
                   ⚡ 自動分配
                 </button>
+                )}
               </>
             )}
             {selectMode && (
@@ -4603,11 +5030,13 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 </div>
                 {selectedTodos.length > 0 && (
                   <>
+                    {!isRcRecordOnly(activeSubject) && (
                     <button onClick={() => openAutoDist(selectedTodos)}
                       style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px" }) }}>
                       ⚡ 自動分配
                     </button>
-                    {!autoMode && (
+                    )}
+                    {!autoMode && !isRcRecordOnly(activeSubject) && (
                       <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
                         style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
                         📅 月に追加
@@ -4880,7 +5309,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
           {(() => {
             const today = todayStr();
             const due = subjectTodos
-              .filter(t => t.reviewDue && t.reviewDue <= today && t.understanding >= 1 && t.understanding <= 3)
+              .filter(t => t.reviewDue && t.reviewDue <= today && t.understanding >= 1 && t.understanding <= 3 && !isRcRecordOnly(t.subjectId))
               .sort((a, b) => (a.reviewDue || "").localeCompare(b.reviewDue || ""));
             if (due.length === 0) return null;
             const shown = due.slice(0, 40);
@@ -5065,7 +5494,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       }}>{fmtH(displayMinutes)}{hasChildren && <span style={{ opacity: 0.6 }}> 📝{doneChildren}/{children.length}</span>}</span>
                     ) : null}
                     <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
-                      {!autoMode && (
+                      {!autoMode && !isRcRecordOnly(t.subjectId) && (
                         <div style={{ display: "flex", gap: 3 }}>
                           <button onClick={() => setMonthPickerTodo(t)} title="月を選んで追加"
                             style={{
@@ -5223,8 +5652,9 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       reviewing: { bg: C.yellow, color: "#fff", border: C.yellow, mark: "◐" },
                       done: { bg: activeSubjectData.color, color: "#fff", border: activeSubjectData.color, mark: "✓" },
                     }[cst];
-                    const U = SR_MARK[c.understanding];
-                    const cDue = c.reviewDue && c.understanding && c.understanding < 4 ? c.reviewDue : null;
+                    const cRc = isRcRecordOnly(c.subjectId);
+                    const U = cRc ? null : SR_MARK[c.understanding];
+                    const cDue = !cRc && c.reviewDue && c.understanding && c.understanding < 4 ? c.reviewDue : null;
                     const cDueToday = cDue && cDue <= todayStr();
                     return (
                       <div key={c.id} style={{
@@ -5277,11 +5707,21 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                                   padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700,
                                 }}>{U.mark}</span>
                               )}
+                              {cRc && c.firstTry !== undefined && (
+                                <span style={{
+                                  background: (c.firstTry ? C.green : C.red) + "20", color: c.firstTry ? C.green : C.red,
+                                  padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700, whiteSpace: "nowrap",
+                                }}>{c.firstTry ? "○ 1発" : "✕ 1発ならず"}</span>
+                              )}
                               {cDue && (
                                 <span style={{
                                   fontSize: 9, fontWeight: 600,
                                   color: cDueToday ? C.red : C.textMid,
                                 }}>{cDueToday ? "● 今日復習" : `次回 ${cDue.slice(5).replace("-", "/")}`}</span>
+                              )}
+                              {c.isLecture && c.deadline && cst !== "done" && (
+                                <span style={{ fontSize: 9, fontWeight: 700, whiteSpace: "nowrap",
+                                  color: c.deadline < todayStr() ? C.red : C.textMid }}>〆{c.deadline.slice(5).replace("-", "/")}</span>
                               )}
                               {c.minutes ? <span style={{ fontSize: 10, color: activeSubjectData.color }}>{fmtH(c.minutes)}</span> : null}
                               <button onClick={() => {
@@ -5300,7 +5740,37 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                           )}
                         </div>
                         {/* 間隔反復ラダー: 解けた/解けなかった（◎=復習不要の項目は非表示） */}
-                        {editTodoId !== c.id && childSelectParent !== t.id && c.understanding !== 4 && (
+                        {/* 赤チャート（記録のみ）: 1発で解けたかを記録。記録済みならリセットだけ出す */}
+                        {cRc && editTodoId !== c.id && childSelectParent !== t.id && (
+                          <div style={{ display: "flex", gap: 6, marginTop: 6, marginLeft: 36, alignItems: "center" }}>
+                            {c.firstTry === undefined ? (
+                              <>
+                                <button onClick={() => { setResultMinutes(""); setResultModal({ id: c.id, solved: true }); }}
+                                  style={{
+                                    padding: "4px 12px", borderRadius: 6,
+                                    background: C.green, border: `1px solid ${C.green}`,
+                                    color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                                    lineHeight: 1, fontFamily: font,
+                                  }}>1発で解けた</button>
+                                <button onClick={() => { setResultMinutes(""); setResultModal({ id: c.id, solved: false }); }}
+                                  style={{
+                                    padding: "4px 12px", borderRadius: 6,
+                                    background: "transparent", border: `1px solid ${C.red}`,
+                                    color: C.red, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                                    lineHeight: 1, fontFamily: font,
+                                  }}>解けなかった</button>
+                              </>
+                            ) : (
+                              <button onClick={() => resetFirstTry(c.id)} title="記録を消して未記録に戻す"
+                                style={{
+                                  padding: "4px 8px", borderRadius: 6, background: "transparent",
+                                  border: `1px solid ${C.border}`, color: C.textDim, fontSize: 10,
+                                  cursor: "pointer", lineHeight: 1, fontFamily: font,
+                                }}>記録をリセット</button>
+                            )}
+                          </div>
+                        )}
+                        {!cRc && !c.isLecture && editTodoId !== c.id && childSelectParent !== t.id && c.understanding !== 4 && (
                           <div style={{ display: "flex", gap: 6, marginTop: 6, marginLeft: 36, alignItems: "center" }}>
                             <button onClick={() => { setResultMinutes(""); setResultModal({ id: c.id, solved: true }); }}
                               style={{
@@ -5609,10 +6079,11 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         if (!todo) return null;
         const subj = subjects.find(s => s.id === todo.subjectId);
         const cur = todo.understanding || 0;
-        const curInfo = SR_MARK[cur];
+        const rcOnly = isRcRecordOnly(todo.subjectId);
+        const curInfo = rcOnly ? null : SR_MARK[cur];
         const CHOICES = [
-          { solved: true,  label: "解けた",       mark: SR_MARK[srApply(cur, true, todayStr()).understanding], color: C.green, icon: "○" },
-          { solved: false, label: "解けなかった", mark: SR_MARK[srApply(cur, false, todayStr()).understanding], color: C.red, icon: "✕" },
+          { solved: true,  label: rcOnly ? "1発で解けた" : "解けた", mark: rcOnly ? null : SR_MARK[srApply(cur, true, todayStr()).understanding], color: C.green, icon: "○" },
+          { solved: false, label: "解けなかった", mark: rcOnly ? null : SR_MARK[srApply(cur, false, todayStr()).understanding], color: C.red, icon: "✕" },
         ];
         const submit = () => {
           recordResult(resultModal.id, resultModal.solved, resultMinutes);
@@ -5629,7 +6100,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
               <div style={{ fontSize: 14, color: C.text, marginBottom: 4 }}>{todo.text}</div>
               <div style={{ fontSize: 11, color: C.textMid, marginBottom: 14 }}>
                 {subj && <span style={{ color: subj.color }}>📚 {subj.name}　</span>}
-                現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}
+                {rcOnly ? "1発で解けたかを記録します（復習・練習の予定は作りません）" : <>現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}</>}
               </div>
               {/* 結果（解けた/解けなかった）— 切り替え可能 */}
               <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
@@ -5651,7 +6122,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       }}>{ch.icon}</span>
                       <span style={{ textAlign: "left", lineHeight: 1.2 }}>
                         <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: active ? "#fff" : C.text }}>{ch.label}</span>
-                        <span style={{ display: "block", fontSize: 10, color: active ? "#fff" : C.textMid }}>→ {ch.mark.mark}（{ch.mark.label}）</span>
+                        {ch.mark && <span style={{ display: "block", fontSize: 10, color: active ? "#fff" : C.textMid }}>→ {ch.mark.mark}（{ch.mark.label}）</span>}
                       </span>
                     </button>
                   );
@@ -7415,22 +7886,67 @@ function App() {
     setSubjectCategories(prev => (prev || []).includes("趣味勉強") ? prev : [...(prev || []), "趣味勉強"]);
   }, [syncEmail, syncStatus]);
 
-  // 既存CPAの例題（動画TODOの子）を「例題」タブへ一度だけ移行する。
-  // 赤チャート移行と同様、メール設定済みなら初回クラウド取得の完了後に実行する。
-  const cpaExMigratedRef = useRef(false);
+  // 赤チャート（記録のみモード）: 未完了の赤チャートタスクと月次・週次マーカーを外し、
+  // 解いた問題の「1発で解けたか」を履歴から判定する。起動ごとに1回（冪等）。
+  // メール設定済みなら初回クラウド取得の完了後に実行する。
+  const rcRecordOnlyRef = useRef(false);
   useEffect(() => {
-    if (cpaExMigratedRef.current) return;
+    if (!RC_RECORD_ONLY || rcRecordOnlyRef.current) return;
     if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
-    cpaExMigratedRef.current = true;
-    setSubjectTodos(prev => {
-      let next = prev;
-      const r = migrateCpaExampleTrack({ subjectTodos: next, subjects });
-      if (r.moved) next = r.subjectTodos;
-      // 例題・トレーニングタブにも動画と同じ親（章立て）を用意する。
-      const r2 = ensureCpaParallelParents({ subjectTodos: next, subjects });
-      if (r2.added) next = r2.subjectTodos;
-      return next === prev ? prev : next;
+    rcRecordOnlyRef.current = true;
+    // 他の起動時移行（赤チャートTODOの追記など）と競合しないよう、すべて関数形式で更新する。
+    // firstTry の判定には移行前のタスク（完了記録）を使う。
+    const histTasks = tasks;
+    const run = (patch) => migrateRcRecordOnly({ tasks: histTasks, subjectTodos: [], monthlyPlans: [], weeklyPlans: [], ...patch });
+    setSubjectTodos(prev => { const r = run({ subjectTodos: prev }); return r.todoChanged ? r.subjectTodos : prev; });
+    setTasks(prev => { const r = migrateRcRecordOnly({ tasks: prev, subjectTodos: [], monthlyPlans: [], weeklyPlans: [] }); return r.removedTasks ? r.tasks : prev; });
+    setMonthlyPlans(prev => { const r = run({ monthlyPlans: prev }); return r.monthlyPlans.length !== prev.length ? r.monthlyPlans : prev; });
+    setWeeklyPlans(prev => { const r = run({ weeklyPlans: prev }); return r.weeklyPlans.length !== prev.length ? r.weeklyPlans : prev; });
+  }, [syncEmail, syncStatus]);
+
+  // 会計士（CPA勉強）を講義の受講計画で作り直す（一度だけ。settings.cpaLectureRebuild に版を記録）。
+  // ・CPA勉強の科目・TODO・未完了タスク・月次/週次マーカーを全て消す（完了済みタスクは振り返り用に残す）
+  // ・財計/財理/管理会計/企業法/監査論の講義TODOを入れ、財計・管理会計・企業法は日曜以外1日1コマで予定に入れる
+  // メール設定済みなら初回クラウド取得の完了後に実行する（他端末で実行済みならフラグが同期されて再実行しない）。
+  // ※旧来の「例題タブへの移行」「例題・トレーニングの親を自動で作る」処理は、作り直しで不要になったので廃止。
+  const cpaRebuildRef = useRef(false);
+  useEffect(() => {
+    if (cpaRebuildRef.current) return;
+    if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
+    cpaRebuildRef.current = true;
+    if ((settings.cpaLectureRebuild || 0) >= CPA_REBUILD_VERSION) return;
+    const oldCpaIds = new Set(subjects.filter(sb => (sb.category || "CPA勉強") === "CPA勉強").map(sb => sb.id));
+    const cpaIds = new Set([...oldCpaIds, ...CPA_LECTURE_SUBJECTS.map(sb => sb.id)]);
+    const lectureTodos = buildCpaLectureTodos();
+    const newTodos = [...lectureTodos, ...buildCpaTrainingTodos(lectureTodos)];
+    const start = todayStr() > "2026-11-10" ? todayStr() : "2026-11-10";
+    const newTasks = scheduleCpaLectures(newTodos, start);
+    // 初期状態で✖️（復習が必要）のトレーニングは、復習タスクも入れる（過ぎていれば今日）
+    newTodos.filter(t => t.track === "training" && t.reviewDue).forEach(t => {
+      const d = t.reviewDue < todayStr() ? todayStr() : t.reviewDue;
+      newTasks.push({
+        id: genId(), date: d, title: `復習: 財計 ${t.problem || t.text}`,
+        hour: null, duration: (t.minutes || CPA_TRAINING_MINUTES) / 60, priority: "high",
+        actual: null, done: false, note: "", goalId: null,
+        kind: "study", subjectId: t.subjectId, subjectTodoId: t.id,
+        isReview: true, originalDate: d,
+      });
     });
+    setSubjects(prev => {
+      const others = prev.filter(sb => !cpaIds.has(sb.id) && (sb.category || "CPA勉強") !== "CPA勉強");
+      const cpa = CPA_LECTURE_SUBJECTS.map(({ id, name, color }) => {
+        const ex = prev.find(sb => sb.id === id);
+        return ex ? { ...ex, category: "CPA勉強" } : { id, name, color, category: "CPA勉強" };
+      });
+      return [...cpa, ...others];
+    });
+    setSubjectTodos(prev => [...newTodos, ...prev.filter(t => !cpaIds.has(t.subjectId))]);
+    setTasks(prev => [...prev.filter(t => !(cpaIds.has(t.subjectId) && !t.done)), ...newTasks]);
+    setMonthlyPlans(prev => prev.filter(p => !cpaIds.has(p.subjectId)));
+    setWeeklyPlans(prev => prev.filter(p => !cpaIds.has(p.subjectId)));
+    resyncPlanMarkers(newTasks.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
+      setMonthlyPlans, setWeeklyPlans);
+    setSettings(st => ({ ...st, cpaLectureRebuild: CPA_REBUILD_VERSION }));
   }, [syncEmail, syncStatus]);
 
   // Pull from cloud on initial load if email is set
