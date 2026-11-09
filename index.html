@@ -27,6 +27,29 @@
     /* iOS safe area */
     body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
   </style>
+  <script>
+  // ===== 自動更新チェック =====
+  // index.html を更新したら APP_VERSION も必ず変更すること（ホーム画面アプリ・ブラウザの古いキャッシュ検知用）。
+  // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
+  // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
+  // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
+  const APP_VERSION = '20261109-1';
+  async function checkUpdate() {
+    try {
+      if (window.__dayflowPushPending) return;
+      const res = await fetch('./index.html?t=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) return;
+      const m = (await res.text()).match(/APP_VERSION = '([^']+)'/);
+      if (!m || m[1] === APP_VERSION) return;
+      if (window.__dayflowPushPending) return;
+      if (sessionStorage.getItem('reloadedFor') === m[1]) return; // リロードループ防止
+      sessionStorage.setItem('reloadedFor', m[1]);
+      location.replace(location.pathname + '?v=' + encodeURIComponent(m[1]));
+    } catch (e) {}
+  }
+  checkUpdate();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
+  </script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
@@ -7980,10 +8003,13 @@ function App() {
     const payload = { tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, reviews, settings, subjectCategories };
     const serialized = JSON.stringify(payload);
     if (serialized === lastPushedDataRef.current) return;
+    // 送信待ちの間は自動更新の再読み込みを見送らせる（index.html 先頭の checkUpdate 参照）
+    window.__dayflowPushPending = true;
     const timer = setTimeout(() => {
       setSyncStatus("syncing");
       cloudPush(syncEmail, payload).then(ok => {
         if (ok) {
+          window.__dayflowPushPending = false;
           lastPushedDataRef.current = serialized;
           setLastSyncedAt(Date.now());
           setSyncStatus("synced");
