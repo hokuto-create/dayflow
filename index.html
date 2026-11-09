@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261109-4';
+  const APP_VERSION = '20261109-5';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -7813,18 +7813,52 @@ async function describeHttpError(res) {
   try { body = (await res.text()).slice(0, 200); } catch {}
   return `HTTP ${res.status}${res.statusText ? " " + res.statusText : ""}${body ? "：" + body : ""}`;
 }
+// 同期データの項目（クラウドの data の中身）。分割取得で1項目ずつ取るときに使う。
+const SYNC_KEYS = ["tasks", "goals", "subjects", "subjectTodos", "monthlyPlans", "weeklyPlans", "reviews", "settings", "subjectCategories"];
+
+// GET して JSON を返す。{ ok, json } / { ok: false, error, network, ms }。
+async function supaGet(query) {
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/dayflow_data?${query}`, {
+      headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` },
+    });
+    if (!res.ok) return { ok: false, error: await describeHttpError(res), network: false, ms: Date.now() - t0 };
+    return { ok: true, json: await res.json() };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e), network: true, ms: Date.now() - t0 };
+  }
+}
+
 // 取得。{ ok: true, row }（行が無ければ row: null）/ 失敗なら { ok: false, error }。
+// まず全体を一度に取り、通信エラーで失敗したら項目ごとに分けて取り直す
+// （一度に大きなデータを受け取れない環境向け）。それでもだめなら原因の切り分け用の情報を返す。
 async function cloudPull(email) {
   if (!email) return { ok: false, error: "メール未設定" };
-  try {
-    const res = await fetch(`${SUPA_URL}/rest/v1/dayflow_data?user_email=eq.${encodeURIComponent(email)}&select=data,updated_at`, {
-      headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` },
-      cache: "no-store",
-    });
-    if (!res.ok) return { ok: false, error: "取得に失敗：" + await describeHttpError(res) };
-    const rows = await res.json();
-    return { ok: true, row: rows[0] || null };
-  } catch (e) { console.error("pull failed", e); return { ok: false, error: "取得に失敗（通信エラー）：" + (e && e.message || e) }; }
+  const who = `user_email=eq.${encodeURIComponent(email)}`;
+  const full = await supaGet(`${who}&select=data,updated_at`);
+  if (full.ok) return { ok: true, row: full.json[0] || null };
+  console.error("pull failed", full.error);
+  if (!full.network) return { ok: false, error: "取得に失敗：" + full.error };
+  const sec = (ms) => `${(ms / 1000).toFixed(1)}秒`;
+  const head = `取得に失敗（通信エラー・${sec(full.ms)}）：${full.error}`;
+  // 小さな通信（更新時刻だけ）が通るか
+  const light = await supaGet(`${who}&select=updated_at`);
+  if (!light.ok) {
+    return { ok: false, error: `${head}／更新時刻の確認も失敗（${light.network ? "通信エラー" : light.error}）。この端末からクラウドに接続できていない可能性があります` };
+  }
+  if (!light.json[0]) return { ok: true, row: null };
+  // 項目ごとに分けて取得
+  const data = {};
+  for (const k of SYNC_KEYS) {
+    const part = await supaGet(`${who}&select=v:data->${k}`);
+    if (!part.ok) {
+      return { ok: false, error: `${head}／更新時刻の確認は成功、分割取得も「${k}」で失敗（${part.network ? "通信エラー・" + sec(part.ms) : part.error}）` };
+    }
+    const v = part.json[0] ? part.json[0].v : null;
+    if (v != null) data[k] = v;
+  }
+  return { ok: true, row: { data, updated_at: light.json[0].updated_at }, split: true };
 }
 
 // クラウドの更新時刻だけを取る（軽い確認用）。行が無ければ 0、失敗したら null。
