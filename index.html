@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261109-9';
+  const APP_VERSION = '20261109-10';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -522,7 +522,8 @@ const CPA_LECTURE_MINUTES = 180;
 // 作り直しの版。内容を変えたら上げる（未実行・旧版の端末で一度だけ作り直しが走る）。
 // 版3→4 は講義の開始日の変更だけなので、版3の端末は作り直さず講義の予定だけ並べ直す。
 // 版4→5 は財理の上級講義に第23回を足すだけなので、作り直さず足りない回を追加して予定に入れる。
-const CPA_REBUILD_VERSION = 5;
+const CPA_REBUILD_VERSION = 6;
+// 版5→6 は管理会計のトレーニング対応表を足すだけなので、作り直さず足りない科目のトレーニングを登録する。
 
 // 作り直し済みのデータに、定義（CPA_LECTURE_SUBJECTS）より足りない講義の回を足す。
 // 区分の親が見つかり、その「第N回」が無いものだけを追加する（冪等）。返り値は追加する講義TODOの配列。
@@ -641,6 +642,51 @@ const CPA_CALC_TRAININGS = [
   ["上級講義", 9, ["トレ⑤ 15-1", "トレ⑤ 16-1", "トレ⑥ 8-1", "トレ⑥ 8-2"]],
   ["Web補講", 3, ["トレ⑧ 1-1", "トレ⑧ 1-2", "トレ⑧ 3-1", "トレ⑧ 3-2", "トレ⑧ 4-1", "トレ⑧ 4-2", "トレ⑧ 5-1", "トレ⑧ 6-1", "トレ⑧ 6-2", "トレ⑧ 6-3", "トレ⑧ 7-1", "トレ⑧ 8-1", "トレ⑧ 8-2", "トレ⑧ 9-1", "トレ⑧ 9-2", "トレ⑧ 9-3", "トレ⑧ 10-1", "トレ⑧ 11-1", "トレ⑧ 11-2", "トレ⑧ 12-1", "トレ⑧ 13-1", "トレ⑧短 2-1", "トレ⑧短 3-1", "トレ⑧短 6-1", "トレ⑧短 7-1", "トレ⑧短 8-1", "トレ⑧短 9-1"]],
 ];
+// 管理会計の講義とトレーニング・ミニテストの対応（TAC 管理会計論 復習管理表より）。[区分, 回, [問題...]]
+// 【計算x-x-x】はトレーニングの問題番号。基礎マスターのミニテストは表どおり次の回の先頭にある
+// （前回の範囲を次の講義の日に解く）。実力テストの回（基礎マスター第8・15・22回）にはない。
+const CPA_MGMT_TRAININGS = [
+  ["入門", 1, ["計算 1-1-1", "計算 1-2-1", "計算 1-2-2"]],
+  ["入門", 2, ["計算 2-1-1", "計算 2-1-2", "計算 2-1-3", "計算 2-3-1"]],
+  ["入門", 3, ["計算 2-2-1", "計算 2-2-2", "計算 2-2-3", "計算 2-2-4", "計算 3-1-1", "計算 3-1-2"]],
+  ["入門", 4, ["計算 3-2-1", "計算 3-3-1", "計算 3-3-2", "計算 3-3-3", "計算 3-3-4"]],
+  ["入門", 5, ["計算 4-1-1", "計算 4-2-1", "計算 4-3-1", "計算 4-4-1"]],
+  ["入門", 6, ["計算 4-5-1", "計算 4-6-1", "計算 4-7-1"]],
+  ["入門", 7, ["計算 5-2-1", "計算 5-2-2", "計算 5-2-3", "計算 5-2-4", "計算 5-2-5", "計算 5-2-6"]],
+  ["入門", 8, ["計算 6-2-1", "計算 6-2-2", "計算 6-2-3", "計算 6-3-1", "計算 6-5-1", "計算 6-5-2", "計算 6-5-3"]],
+  ["基礎マスター", 1, ["計算 2-2-1", "計算 2-2-2", "計算 2-2-3", "計算 2-2-6"]],
+  ["基礎マスター", 2, ["ミニテスト①", "計算 2-3-1", "計算 2-3-2", "計算 3-2-1", "計算 3-3-1"]],
+  ["基礎マスター", 3, ["ミニテスト②", "計算 3-4-1", "計算 3-4-2"]],
+  ["基礎マスター", 4, ["ミニテスト③", "計算 4-2-2", "計算 4-2-4", "計算 4-2-5", "計算 4-2-6", "計算 4-2-7", "計算 4-2-8", "計算 4-2-9", "計算 4-3-1", "計算 4-3-2", "計算 4-3-3"]],
+  ["基礎マスター", 5, ["ミニテスト④", "計算 5-3-1", "計算 5-3-2", "計算 5-3-3", "計算 5-4-1"]],
+  ["基礎マスター", 6, ["ミニテスト⑤", "計算 6-2-1", "計算 6-2-2", "計算 6-2-3", "計算 6-2-4", "計算 6-3-1", "計算 6-3-2", "計算 6-4-1", "計算 6-4-2", "計算 6-4-3", "計算 6-4-4", "計算 6-4-5"]],
+  ["基礎マスター", 7, ["ミニテスト⑥", "計算 6-4-6", "計算 6-4-7", "計算 6-4-8", "計算 6-4-9", "計算 6-4-12", "計算 6-4-13", "計算 6-4-14", "計算 6-5-2", "計算 6-5-3", "計算 6-5-4", "計算 6-5-5", "計算 6-5-6", "計算 6-5-7", "計算 6-5-8", "計算 6-5-9", "計算 6-5-10", "計算 6-6-1", "計算 6-6-2"]],
+  ["基礎マスター", 9, ["計算 6-7-1", "計算 6-7-2", "計算 6-7-3", "計算 6-8-1", "計算 6-8-2", "計算 6-8-3", "計算 6-8-6", "計算 6-8-7", "計算 6-8-8", "計算 6-8-9"]],
+  ["基礎マスター", 10, ["ミニテスト⑦", "計算 7-2-1", "計算 7-2-2", "計算 7-2-3", "計算 7-2-4", "計算 7-2-5", "計算 7-2-6", "計算 7-2-7", "計算 7-2-8", "計算 7-2-9"]],
+  ["基礎マスター", 11, ["ミニテスト⑧", "計算 7-3-1", "計算 7-3-2", "計算 7-3-3", "計算 7-3-4"]],
+  ["基礎マスター", 12, ["ミニテスト⑨", "計算 8-1-1", "計算 8-2-1", "計算 8-2-2", "計算 8-2-3", "計算 8-2-4", "計算 8-3-1", "計算 8-4-1", "計算 8-4-2", "計算 8-5-1", "計算 8-5-2"]],
+  ["基礎マスター", 13, ["ミニテスト⑩", "計算 3-2-1", "計算 3-2-2", "計算 3-2-3", "計算 3-2-4", "計算 3-2-5", "計算 3-2-6", "計算 3-3-1", "計算 3-3-2", "計算 3-3-3", "計算 3-3-4", "計算 3-4-1", "計算 3-4-2"]],
+  ["基礎マスター", 14, ["ミニテスト⑪", "計算 4-1-1", "計算 4-3-1", "計算 4-3-2", "計算 4-3-3", "計算 4-3-4", "計算 4-4-1", "計算 4-4-2", "計算 4-4-3", "計算 4-4-4"]],
+  ["基礎マスター", 16, ["計算 7-2-1", "計算 7-2-2", "計算 7-2-3", "計算 7-2-4", "計算 7-2-5", "計算 8-2-1", "計算 8-2-2", "計算 8-2-3"]],
+  ["基礎マスター", 17, ["ミニテスト⑫", "計算 8-3-1", "計算 8-3-2", "計算 8-3-3", "計算 8-3-4", "計算 8-4-1", "計算 8-4-2", "計算 8-5-1", "計算 8-5-2", "計算 8-5-3", "計算 8-6-1", "計算 8-6-2", "計算 8-7-1", "計算 8-7-2"]],
+  ["基礎マスター", 18, ["ミニテスト⑬", "計算 9-2-1", "計算 9-2-2", "計算 9-2-3", "計算 9-2-4", "計算 9-2-5"]],
+  ["基礎マスター", 19, ["ミニテスト⑭", "計算 9-4-1", "計算 9-4-2", "計算 9-4-3", "計算 9-5-1", "計算 9-5-2", "計算 9-5-3", "計算 9-5-4", "計算 9-6-1"]],
+  ["基礎マスター", 20, ["ミニテスト⑮", "計算 10-2-1", "計算 10-2-2", "計算 10-4-1", "計算 1-3-1", "計算 1-3-2"]],
+  ["基礎マスター", 21, ["ミニテスト⑯", "計算 7-4-1", "計算 7-4-2", "計算 7-4-3", "計算 7-4-4", "計算 2-4-1", "計算 2-4-2"]],
+  ["上級講義", 1, ["計算 2-2-4", "計算 2-2-5"]],
+  ["上級講義", 2, ["計算 4-2-1", "計算 4-2-3"]],
+  ["上級講義", 3, ["計算 5-1-1", "計算 5-2-1", "計算 5-3-4", "計算 5-3-5", "計算 6-5-1", "計算 6-7-4", "計算 6-7-5", "計算 6-7-6", "計算 6-7-7"]],
+  ["上級講義", 4, ["計算 6-4-10", "計算 6-4-11", "計算 6-8-4", "計算 6-8-5"]],
+  ["上級講義", 5, ["計算 7-4-5", "計算 7-4-6", "計算 7-4-7"]],
+  ["上級講義", 6, ["計算 7-4-8", "計算 7-4-9", "計算 4-4-5", "計算 4-4-6"]],
+  ["上級講義", 7, ["計算 2-2-1", "計算 2-2-2", "計算 2-2-3", "計算 2-2-4", "計算 2-3-1", "計算 2-3-2", "計算 2-3-3", "計算 2-3-4", "計算 2-3-5"]],
+  ["上級講義", 8, ["計算 6-2-1", "計算 6-2-2"]],
+  ["上級講義", 9, ["計算 5-2-1", "計算 5-2-2", "計算 5-2-3"]],
+  ["上級講義", 10, ["計算 9-4-4", "計算 10-2-3", "計算 10-3-1", "計算 10-3-2", "計算 10-3-3", "計算 10-3-4"]],
+  ["上級講義", 11, ["計算 10-5-1", "計算 10-5-2"]]
+];
+// 科目ごとのトレーニング対応表
+const CPA_TRAININGS = [["s_calc", CPA_CALC_TRAININGS], ["s_mgmt", CPA_MGMT_TRAININGS]];
 const CPA_TRAINING_MINUTES = 15; // トレーニング・ミニテスト1問の目安（分）
 // 作り直し前に解いた結果（ラダーの初期状態）。[区分, 回, 問題, 解けたか]
 // 解けた → ◎（復習不要）、解けなかった → ✖️（翌日復習。復習タスクも入れる）。
@@ -655,45 +701,52 @@ const CPA_CALC_INITIAL_RESULTS = [
 ];
 const CPA_INITIAL_RESULT_DATE = "2026-11-09"; // 上の結果を記録した日
 
-// 財計のトレーニングTODOを作る（トレーニングタブ: 講義の回=親、問題=子）。
-// 親は「基礎マスターⅠ 第1回」…「基礎マスターⅡ 第1回」…と講義順に並ぶ（上級の補講分は「Web補講」）。
-// 子は lectureTodoId で対応する講義の回を指す。todos には財計の講義TODOを含む配列を渡す。
-function buildCpaTrainingTodos(todos) {
+// トレーニングTODOを作る（トレーニングタブ: 講義の回=親、問題=子）。
+// 親は「基礎マスターⅠ 第1回」…と講義順に並ぶ（財計の上級の補講分は「Web補講」）。
+// 子は lectureTodoId で対応する講義の回を指す。todos には講義TODOを含む配列を渡す。
+// onlySubjects を渡すとその科目だけを作る（後から科目を足すとき用）。
+function buildCpaTrainingTodos(todos, onlySubjects) {
   const out = [];
   let seq = 0;
-  CPA_CALC_TRAININGS.forEach(([secTitle, n, items]) => {
-    const sec = todos.find(t => t.subjectId === "s_calc" && !t.parentId && (t.track || "video") === "video" && t.text === secTitle);
+  CPA_TRAININGS.filter(([sid]) => !onlySubjects || onlySubjects.includes(sid)).forEach(([sid, table]) => table.forEach(([secTitle, n, items]) => {
+    const sec = todos.find(t => t.subjectId === sid && !t.parentId && (t.track || "video") === "video" && t.text === secTitle);
     const lec = sec && todos.find(t => t.parentId === sec.id && t.isLecture && new RegExp(`^第${n}回`).test(t.text));
     const pid = genId();
-    out.push({ id: pid, subjectId: "s_calc", text: secTitle === "Web補講" ? secTitle : `${secTitle} 第${n}回`,
+    out.push({ id: pid, subjectId: sid, text: secTitle === "Web補講" ? secTitle : `${secTitle} 第${n}回`,
       minutes: null, status: "unwatched", done: false, track: "training", createdAt: ++seq });
     items.forEach(item => {
       // ミニテストは区分ごとに①から振り直されるので、予定のタイトル用に区分名を付ける
       const problem = /^ミニテスト/.test(item) ? `${secTitle} ${item}` : item;
-      const init = CPA_CALC_INITIAL_RESULTS.find(([sec, no, it]) => sec === secTitle && no === n && it === item);
+      const init = sid === "s_calc" && CPA_CALC_INITIAL_RESULTS.find(([sec, no, it]) => sec === secTitle && no === n && it === item);
       const r = init ? srApply(0, init[3], CPA_INITIAL_RESULT_DATE) : null;
-      out.push({ id: genId(), subjectId: "s_calc", parentId: pid, text: item, problem,
+      out.push({ id: genId(), subjectId: sid, parentId: pid, text: item, problem,
         minutes: CPA_TRAINING_MINUTES, track: "training",
         ...(r ? { understanding: r.understanding, reviewDue: r.reviewDue,
                   status: r.understanding >= 4 ? "done" : "reviewing", done: r.understanding >= 4 }
               : { status: "unwatched", done: false }),
         lectureTodoId: lec ? lec.id : null, createdAt: ++seq });
     });
-  });
+  }));
   return out;
+}
+// トレーニングがまだ1つも登録されていない科目の分だけ作る（後から対応表を足した科目向け・冪等）
+function missingCpaTrainingTodos(todos) {
+  const missing = CPA_TRAININGS.map(([sid]) => sid)
+    .filter(sid => !todos.some(t => t.subjectId === sid && t.track === "training" && t.lectureTodoId));
+  return missing.length ? buildCpaTrainingTodos(todos, missing) : [];
 }
 
 // 講義を受講した日に、その回のトレーニングを予定へ入れる（1回目を解く）。
 // まだ解いていない（未完了・マーク無し）で、未完了の予定も無い問題だけを対象にする。
 function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date) {
   if (!lectureTodoId) return [];
-  const subjName = (CPA_LECTURE_SUBJECTS.find(x => x.id === "s_calc") || {}).name || "財計";
+  const subjName = (sid) => (CPA_LECTURE_SUBJECTS.find(x => x.id === sid) || {}).name || "";
   const pending = new Set(tasks.filter(t => !t.done && t.subjectTodoId).map(t => t.subjectTodoId));
   return subjectTodos
     .filter(t => t.lectureTodoId === lectureTodoId && !t.done && !t.understanding && !pending.has(t.id))
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
     .map(t => ({
-      id: genId(), date, title: `${subjName} ${t.problem || t.text}`,
+      id: genId(), date, title: `${subjName(t.subjectId)} ${t.problem || t.text}`,
       hour: null, duration: (t.minutes || CPA_TRAINING_MINUTES) / 60, priority: "medium",
       actual: null, done: false, note: "", goalId: null,
       kind: "study", subjectId: t.subjectId, subjectTodoId: t.id, originalDate: date,
@@ -965,7 +1018,7 @@ function lectureRange(lectureTodoId, subjectTodos) {
   const items = subjectTodos.filter(t => t.lectureTodoId === lectureTodoId)
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   if (!content && items.length === 0) return null;
-  const trainings = items.filter(t => /^トレ/.test(t.text));
+  const trainings = items.filter(t => !/^ミニテスト/.test(t.text));
   const minis = items.filter(t => /^ミニテスト/.test(t.text));
   return { content: content || [], trainings, minis, items, summary: summarizeTrainings(trainings) };
 }
@@ -973,7 +1026,8 @@ function lectureRange(lectureTodoId, subjectTodos) {
 function summarizeTrainings(trainings) {
   const groups = [];
   trainings.forEach(t => {
-    const m = t.text.match(/^(トレ[①-⑳]短?)\s*(\d+)-(\d+)$/);
+    // 「トレ① 2-1」「トレ①短 2-1」「計算 2-2-1」など。最後の番号だけが連番になっていればまとめる
+    const m = t.text.match(/^(.*?)\s*(\d+(?:-\d+)*)-(\d+)$/);
     if (!m) { groups.push({ label: t.text }); return; }
     const key = `${m[1]}|${m[2]}`;
     const last = groups[groups.length - 1];
@@ -8441,6 +8495,16 @@ function App() {
     const doneVersion = settings.cpaLectureRebuild || 0;
     if (doneVersion >= CPA_REBUILD_VERSION) return;
     const start = todayStr() > CPA_SCHEDULE_START ? todayStr() : CPA_SCHEDULE_START;
+    // 足りない科目のトレーニングを登録する（関数形式なので、同じ回で足した講義TODOにも対応付く）
+    const addMissingTrainings = () => setSubjectTodos(prev => {
+      const add = missingCpaTrainingTodos(prev);
+      return add.length ? [...prev, ...add] : prev;
+    });
+    if (doneVersion === 5) {
+      addMissingTrainings();
+      setSettings(st => ({ ...st, cpaLectureRebuild: CPA_REBUILD_VERSION }));
+      return;
+    }
     if (doneVersion === 4) {
       // 作り直し済み（版4）: 足りない講義の回を足し、その科目の最後の講義の予定の翌日以降（日曜を除く）に置く
       const added = missingCpaLectureTodos(subjectTodos);
@@ -8469,6 +8533,7 @@ function App() {
         resyncPlanMarkers(newTasks.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
           setMonthlyPlans, setWeeklyPlans);
       }
+      addMissingTrainings();
       setSettings(st => ({ ...st, cpaLectureRebuild: CPA_REBUILD_VERSION }));
       return;
     }
@@ -8480,6 +8545,7 @@ function App() {
       setTasks(prev => [...prev.filter(t => !(t.isLecture && !t.done)), ...moved]);
       resyncPlanMarkers(moved.map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: t.date })),
         setMonthlyPlans, setWeeklyPlans);
+      addMissingTrainings();
       setSettings(st => ({ ...st, cpaLectureRebuild: CPA_REBUILD_VERSION }));
       return;
     }
