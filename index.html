@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261110-2';
+  const APP_VERSION = '20261110-3';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -2687,8 +2687,12 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
 
       {/* 1つ表示: 画面いっぱいに今のタスクだけを出す。完了の確認モーダル（zIndex 100）はこの上に重なる */}
       {focusMode && (() => {
+        // 出す順番: 復習が先。その中では古い順（もともとの予定日が早い順）、同じ日なら時刻順
+        const oldKey = (x) => x.originalDate || x.date;
         const list = tasks.filter(t => t.date === selectedDate && !t.done)
-          .sort((a, b) => (a.hour ?? 99) - (b.hour ?? 99));
+          .sort((a, b) => (a.isReview ? 0 : 1) - (b.isReview ? 0 : 1)
+            || oldKey(a).localeCompare(oldKey(b))
+            || (a.hour ?? 99) - (b.hour ?? 99));
         const total = tasks.filter(t => t.date === selectedDate).length;
         // 表示中のタスクが完了・削除されたら、残りの先頭に戻る
         const idx = Math.max(0, list.findIndex(t => t.id === focusId));
@@ -2699,6 +2703,12 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         const step = (d) => list.length && setFocusId(list[(idx + d + list.length) % list.length].id);
         const hm = (h) => { const m = Math.round(h * 60); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`; };
         const navBtn = { ...btn(false, C.textMid, { padding: "14px 0", fontSize: 18, flex: 1, borderRadius: 12 }) };
+        // 範囲: 講義ならその回のテキストのページとトレーニング。トレーニング・復習なら元の講義のテキストのページ。
+        const todo = t && t.subjectTodoId ? subjectTodos.find(x => x.id === t.subjectTodoId) : null;
+        const lecId = !t ? null : t.isLecture ? t.subjectTodoId : todo ? todo.lectureTodoId : null;
+        const range = lectureRange(lecId, subjectTodos);
+        const lecTodo = !t || t.isLecture || !lecId ? null : subjectTodos.find(x => x.id === lecId);
+        const lecSec = lecTodo ? subjectTodos.find(x => x.id === lecTodo.parentId) : null;
         return (
           <div style={{ position: "fixed", inset: 0, zIndex: 90, background: C.bg, display: "flex", flexDirection: "column",
             borderLeft: `8px solid ${color}`, boxSizing: "border-box",
@@ -2719,6 +2729,27 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                     {abbrevTitle(t.title)}
                   </div>
                   {t.note && <div style={{ fontSize: 13, color: C.textMid, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{t.note}</div>}
+                  {range && (range.content.length > 0 || (t.isLecture && range.items.length > 0)) && (
+                    <div style={{ fontSize: 14, color: C.textMid, lineHeight: 1.55, wordBreak: "break-word",
+                      background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px" }}>
+                      {lecTodo && (
+                        <div style={{ fontSize: 12, color: C.textDim, marginBottom: 2 }}>
+                          {lecSec ? `${lecSec.text} ` : ""}{lecTodo.text} の範囲
+                        </div>
+                      )}
+                      {range.content.map((g, i) => (
+                        <div key={i}>
+                          📖 {g.book && <b style={{ color: C.text }}>{g.book} </b>}
+                          {g.pages && <b style={{ color: C.text }}>{g.pages}　</b>}
+                          {g.units.join("／")}
+                          {g.note && <span style={{ color: C.textDim }}>（{g.note}）</span>}
+                        </div>
+                      ))}
+                      {t.isLecture && range.items.length > 0 && (
+                        <div>📝 <b style={{ color: C.text }}>{range.summary}</b>{range.minis.length ? `${range.summary ? "　＋" : ""}${range.minis.map(m => m.text).join("・")}` : ""}</div>
+                      )}
+                    </div>
+                  )}
                   {nextT && (
                     <div style={{ fontSize: 12, color: C.textDim, marginTop: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       次: {abbrevTitle(nextT.title)}
