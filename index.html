@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261110-5';
+  const APP_VERSION = '20261110-6';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -807,19 +807,27 @@ function missingCpaTrainingTodos(todos) {
 
 // 講義を受講した日に、その回のトレーニングを予定へ入れる（1回目を解く）。
 // まだ解いていない（未完了・マーク無し）で、未完了の予定も無い問題だけを対象にする。
-function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date) {
+// lectureTask（完了した講義の予定）を渡すと、当日に解く科目（計算科目）のトレーニングは
+// 講義と同じ日のリストに入れ、講義のすぐ後ろに並ぶようにする（followsTaskId。古い日付の講義でも同じ）。
+function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date, lectureTask) {
   if (!lectureTodoId) return [];
   const subjName = (sid) => (CPA_LECTURE_SUBJECTS.find(x => x.id === sid) || {}).name || "";
   const pending = new Set(tasks.filter(t => !t.done && t.subjectTodoId).map(t => t.subjectTodoId));
   return subjectTodos
     .filter(t => t.lectureTodoId === lectureTodoId && !t.done && !t.understanding && !pending.has(t.id))
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
-    .map(t => ({ t, d: addDays(date, CPA_TRAINING_DELAY[t.subjectId] || 0) }))
-    .map(({ t, d: date }) => ({
+    .map(t => {
+      const delay = CPA_TRAINING_DELAY[t.subjectId] || 0;
+      const sameList = !delay && lectureTask;
+      return { t, d: sameList ? lectureTask.date : addDays(date, delay),
+        od: sameList ? (lectureTask.originalDate || lectureTask.date) : addDays(date, delay) };
+    })
+    .map(({ t, d: date, od }) => ({
       id: genId(), date, title: `${subjName(t.subjectId)} ${t.problem || t.text}`,
       hour: null, duration: (t.minutes || CPA_TRAINING_MINUTES) / 60, priority: "medium",
       actual: null, done: false, note: "", goalId: null,
-      kind: "study", subjectId: t.subjectId, subjectTodoId: t.id, originalDate: date,
+      kind: "study", subjectId: t.subjectId, subjectTodoId: t.id, originalDate: od,
+      ...(lectureTask ? { followsTaskId: lectureTask.id } : {}),
     }));
 }
 
@@ -2591,16 +2599,21 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
     }
     // 講義はチェックだけで受講済みにする（解けた/解けなかったは聞かない）
     if (task.isLecture) {
-      // その回のトレーニングを今日の予定に入れる（受講した当日に1回解く）
+      // その回のトレーニングを、講義と同じ日のリストの講義のすぐ後ろに入れる（受講したらすぐ解く）。
+      // 理論科目の小単元の復習は翌日に入る。
+      const newTr = trainingTasksForLecture(task.subjectTodoId, subjectTodos, tasks, todayStr(), task);
       setTasks(ts => [
         ...ts.map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString() } : t),
-        ...trainingTasksForLecture(task.subjectTodoId, subjectTodos, ts, todayStr()),
+        ...newTr,
       ]);
+      // 1つ表示では、続けてこの回の最初のトレーニングを出す
+      const firstTr = newTr.find(x => x.date === task.date);
+      if (firstTr) setFocusId(firstTr.id);
       if (task.subjectTodoId) {
         setSubjectTodos(sts => sts.map(s => s.id === task.subjectTodoId ? { ...s, status: "done", done: true } : s));
       }
       setLectureExText("");
-      setLectureExModal({ ...task, trainingCount: trainingTasksForLecture(task.subjectTodoId, subjectTodos, tasks, todayStr()).length });
+      setLectureExModal({ ...task, trainingCount: newTr.length });
       return;
     }
     // Open understanding modal
@@ -2707,12 +2720,16 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
 
       {/* 1つ表示: 画面いっぱいに今のタスクだけを出す。完了の確認モーダル（zIndex 100）はこの上に重なる */}
       {focusMode && (() => {
-        // 出す順番: 復習が先。その中では古い順（もともとの予定日が早い順）、同じ日なら時刻順
+        // 出す順番: ①受講した講義のトレーニング（講義のすぐ後に続けて解く。followsTaskId 付き）
+        //           ②復習 ③その他。それぞれの中では古い順（もともとの予定日が早い順）、同じ日なら時刻順。
         const oldKey = (x) => x.originalDate || x.date;
+        const rank = (x) => x.followsTaskId && !x.isReview ? 0 : x.isReview ? 1 : 2;
+        const order = new Map(tasks.map((x, i) => [x.id, i]));
         const list = tasks.filter(t => t.date === selectedDate && !t.done)
-          .sort((a, b) => (a.isReview ? 0 : 1) - (b.isReview ? 0 : 1)
+          .sort((a, b) => rank(a) - rank(b)
             || oldKey(a).localeCompare(oldKey(b))
-            || (a.hour ?? 99) - (b.hour ?? 99));
+            || (a.hour ?? 99) - (b.hour ?? 99)
+            || (rank(a) === 0 ? String(a.followsTaskId).localeCompare(String(b.followsTaskId)) || order.get(a.id) - order.get(b.id) : 0));
         const total = tasks.filter(t => t.date === selectedDate).length;
         // 表示中のタスクが完了・削除されたら、残りの先頭に戻る
         const idx = Math.max(0, list.findIndex(t => t.id === focusId));
@@ -3658,7 +3675,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, marginBottom: 10 }}>
                 📝 {CPA_TRAINING_DELAY[lectureExModal.subjectId]
                   ? `この回で終わった小単元の復習 ${lectureExModal.trainingCount}件を明日の予定に入れました`
-                  : `この回のトレーニング ${lectureExModal.trainingCount}問を今日の予定に入れました`}
+                  : `この回のトレーニング ${lectureExModal.trainingCount}問を、この講義のすぐ後ろに入れました`}
               </div>
             )}
             <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>
