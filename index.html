@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261110-6';
+  const APP_VERSION = '20261110-8';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -814,7 +814,8 @@ function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date, lectu
   const subjName = (sid) => (CPA_LECTURE_SUBJECTS.find(x => x.id === sid) || {}).name || "";
   const pending = new Set(tasks.filter(t => !t.done && t.subjectTodoId).map(t => t.subjectTodoId));
   return subjectTodos
-    .filter(t => t.lectureTodoId === lectureTodoId && !t.done && !t.understanding && !pending.has(t.id))
+    // ミニテストは授業の最初に解くもの（planMiniTestTasks で授業の直前に置く）なので、受講後には出さない
+    .filter(t => t.lectureTodoId === lectureTodoId && !t.done && !t.understanding && !pending.has(t.id) && !/^ミニテスト/.test(t.text))
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
     .map(t => {
       const delay = CPA_TRAINING_DELAY[t.subjectId] || 0;
@@ -829,6 +830,38 @@ function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date, lectu
       kind: "study", subjectId: t.subjectId, subjectTodoId: t.id, originalDate: od,
       ...(lectureTask ? { followsTaskId: lectureTask.id } : {}),
     }));
+}
+
+// ミニテストは授業の最初に（前回の範囲を）解く。未受講の講義の予定ごとに、その回のミニテストを
+// 講義と同じ日・講義の直前（precedesTaskId）に置く。講義の日がずれたらミニテストも合わせて動かす。
+// 返り値: { add: 追加するタスク[], moves: [{ taskId, date }] }（変更が無ければ空・冪等）
+function planMiniTestTasks(tasks, subjectTodos) {
+  const add = [], moves = [];
+  const minisByLecture = new Map();
+  subjectTodos.forEach(t => {
+    if (!t.lectureTodoId || !/^ミニテスト/.test(t.text || "") || t.done || t.understanding) return;
+    if (!minisByLecture.has(t.lectureTodoId)) minisByLecture.set(t.lectureTodoId, []);
+    minisByLecture.get(t.lectureTodoId).push(t);
+  });
+  if (!minisByLecture.size) return { add, moves };
+  const subjName = (sid) => (CPA_LECTURE_SUBJECTS.find(x => x.id === sid) || {}).name || "";
+  tasks.filter(l => l.isLecture && !l.done && minisByLecture.has(l.subjectTodoId)).forEach(l => {
+    minisByLecture.get(l.subjectTodoId).forEach(m => {
+      const pend = tasks.filter(x => x.subjectTodoId === m.id && !x.done && !x.isReview);
+      if (pend.length === 0) {
+        add.push({
+          id: genId(), date: l.date, title: `${subjName(m.subjectId)} ${m.problem || m.text}`,
+          hour: null, duration: (m.minutes || CPA_TRAINING_MINUTES) / 60, priority: "medium",
+          actual: null, done: false, note: "", goalId: null,
+          kind: "study", subjectId: m.subjectId, subjectTodoId: m.id,
+          originalDate: l.originalDate || l.date, precedesTaskId: l.id,
+        });
+      } else {
+        pend.filter(x => x.precedesTaskId === l.id && x.date !== l.date).forEach(x => moves.push({ taskId: x.id, date: l.date }));
+      }
+    });
+  });
+  return { add, moves };
 }
 
 // daily な科目の未受講の回を、start（科目に startFrom があれば遅い方）から
@@ -1138,7 +1171,7 @@ function LectureRangeLine({ task, subjectTodos, compact }) {
         </div>
       ))}
       {r.trainings.length > 0 && (
-        <div style={row}>📝 {r.summary}{r.minis.length ? `　＋${r.minis.map(m => m.text).join("・")}` : ""}</div>
+        <div style={row}>📝 {r.minis.length ? `最初に${r.minis.map(m => m.text).join("・")}／` : ""}{r.summary}</div>
       )}
     </div>
   );
@@ -2371,6 +2404,8 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   // 1つ表示: この日の未完了タスクを1つだけ大きく出す。iPad で GoodNotes などの横に細く並べて（Slide Over / 小さいウインドウ）使う想定。
   const [focusMode, setFocusMode] = useState(false);
   const [focusId, setFocusId] = useState(null);
+  // 1つ表示で直前に出していた並び（表示中のタスクが完了したら、その次にあったものを出すため）
+  const focusOrderRef = useRef([]);
   // 画面が広いとき（900px以上）はタイムラインの右に講義の範囲パネルを出す
   const [wideLayout, setWideLayout] = useState(() => window.innerWidth >= 900);
   useEffect(() => {
@@ -2723,16 +2758,32 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         // 出す順番: ①受講した講義のトレーニング（講義のすぐ後に続けて解く。followsTaskId 付き）
         //           ②復習 ③その他。それぞれの中では古い順（もともとの予定日が早い順）、同じ日なら時刻順。
         const oldKey = (x) => x.originalDate || x.date;
+        // ミニテスト（precedesTaskId）は授業の最初に解くので、その講義の直前に並べる。
+        const byId = new Map(tasks.map(x => [x.id, x]));
+        const anchor = (x) => (x.precedesTaskId && byId.get(x.precedesTaskId) && !byId.get(x.precedesTaskId).done) ? byId.get(x.precedesTaskId) : x;
         const rank = (x) => x.followsTaskId && !x.isReview ? 0 : x.isReview ? 1 : 2;
         const order = new Map(tasks.map((x, i) => [x.id, i]));
         const list = tasks.filter(t => t.date === selectedDate && !t.done)
-          .sort((a, b) => rank(a) - rank(b)
-            || oldKey(a).localeCompare(oldKey(b))
-            || (a.hour ?? 99) - (b.hour ?? 99)
-            || (rank(a) === 0 ? String(a.followsTaskId).localeCompare(String(b.followsTaskId)) || order.get(a.id) - order.get(b.id) : 0));
+          .sort((a0, b0) => {
+            const a = anchor(a0), b = anchor(b0);
+            return rank(a) - rank(b)
+              || oldKey(a).localeCompare(oldKey(b))
+              || (a.hour ?? 99) - (b.hour ?? 99)
+              || (a.id !== b.id ? String(a.id).localeCompare(String(b.id)) : 0)
+              || (a0 === a ? 1 : 0) - (b0 === b ? 1 : 0)
+              || (rank(a) === 0 ? String(a.followsTaskId).localeCompare(String(b.followsTaskId)) : 0)
+              || order.get(a0.id) - order.get(b0.id);
+          });
         const total = tasks.filter(t => t.date === selectedDate).length;
-        // 表示中のタスクが完了・削除されたら、残りの先頭に戻る
-        const idx = Math.max(0, list.findIndex(t => t.id === focusId));
+        // 表示中のタスクが完了・削除されたら、直前の並びでその次にあった（まだ残っている）タスクを出す
+        let idx = list.findIndex(t => t.id === focusId);
+        if (idx < 0) {
+          const prev = focusOrderRef.current;
+          const at = prev.indexOf(focusId);
+          const nextId = at >= 0 ? prev.slice(at + 1).find(id => list.some(t => t.id === id)) : null;
+          idx = Math.max(0, nextId ? list.findIndex(t => t.id === nextId) : 0);
+        }
+        focusOrderRef.current = list.map(t => t.id);
         const t = list[idx] || null;
         const nextT = list.length > 1 ? list[(idx + 1) % list.length] : null;
         const subj = t && subjects.find(s => s.id === t.subjectId);
@@ -2786,7 +2837,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                         </div>
                       ))}
                       {t.isLecture && range.items.length > 0 && (
-                        <div>📝 <b style={{ color: C.text }}>{range.summary}</b>{range.minis.length ? `${range.summary ? "　＋" : ""}${range.minis.map(m => m.text).join("・")}` : ""}</div>
+                        <div>📝 {range.minis.length ? `最初に${range.minis.map(m => m.text).join("・")}${range.summary ? "／" : ""}` : ""}<b style={{ color: C.text }}>{range.summary}</b></div>
                       )}
                     </div>
                   )}
@@ -8959,6 +9010,20 @@ function App() {
     setWeeklyPlans(recoveryUndo.weeklyPlans);
     setRecoveryUndo(null);
   };
+
+  // ミニテストを、未受講の講義の直前（同じ日）に置く。講義の日がずれたら合わせて動かす。
+  // タスク・TODOが変わるたびに走るが、変更が無ければ setTasks は呼ばない（冪等）。
+  useEffect(() => {
+    if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
+    const { add, moves } = planMiniTestTasks(tasks, subjectTodos);
+    if (!add.length && !moves.length) return;
+    const mv = new Map(moves.map(m => [m.taskId, m.date]));
+    setTasks(ts => {
+      const have = new Set(ts.filter(x => !x.done && x.subjectTodoId).map(x => x.subjectTodoId));
+      return [...ts.map(x => mv.has(x.id) ? { ...x, date: mv.get(x.id) } : x),
+        ...add.filter(a => !have.has(a.subjectTodoId))];
+    });
+  }, [tasks, subjectTodos, syncEmail, syncStatus]);
 
   // 1日1題（赤チャート・教材ごと）: 復習などで埋まった日の例題・練習を次の空き日へずらす。
   // タスクが変わるたびに走るが、調整済みなら移動が出ないので setTasks は呼ばれない。
