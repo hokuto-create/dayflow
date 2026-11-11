@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261110-10';
+  const APP_VERSION = '20261111-1';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -522,7 +522,8 @@ const CPA_LECTURE_MINUTES = 180;
 // 作り直しの版。内容を変えたら上げる（未実行・旧版の端末で一度だけ作り直しが走る）。
 // 版3→4 は講義の開始日の変更だけなので、版3の端末は作り直さず講義の予定だけ並べ直す。
 // 版4→5 は財理の上級講義に第23回を足すだけなので、作り直さず足りない回を追加して予定に入れる。
-const CPA_REBUILD_VERSION = 11;
+const CPA_REBUILD_VERSION = 12;
+// 版11→12 は企業法の講義の回ごとに一問一答（授業の直後）・短答問題集（翌日）を足す（足りない項目だけを追加）。
 // 版10→11 は管理会計 入門のミニテストを足す（足りない項目だけを追加）。
 // 版9→10 は企業法・監査論のミニテストを足す（足りない項目だけを追加）。
 // 版8→9 は財計のミニテストを次の回の先頭に付け直す（予定も直す）。
@@ -691,11 +692,27 @@ const CPA_MGMT_TRAININGS = [
   ["上級講義", 10, ["計算 9-4-4", "計算 10-2-3", "計算 10-3-1", "計算 10-3-2", "計算 10-3-3", "計算 10-3-4"]],
   ["上級講義", 11, ["計算 10-5-1", "計算 10-5-2"]]
 ];
+// 企業法は講義の回ごとに、授業の直後に一問一答、翌日に短答問題集を解く（小単元の復習とは別に出す）。
+// 対応表の各回のミニテストの後ろに足し、対応表に無い回（上級講義など）も講義の回数どおりに足す。
+const CPA_LAW_PER_LECTURE = ["一問一答", "短答問題集"];
+function withLawPerLecture(table) {
+  const law = CPA_LECTURE_SUBJECTS.find(x => x.id === "s_law");
+  const out = [];
+  law.sections.forEach(sec => {
+    for (let n = 1; n <= sec.count; n++) {
+      const row = table.find(([t, no]) => t === sec.title && no === n);
+      const items = row ? row[2] : [];
+      const minis = items.filter(x => /^ミニテスト/.test(x));
+      out.push([sec.title, n, [...minis, ...CPA_LAW_PER_LECTURE, ...items.filter(x => !/^ミニテスト/.test(x))]]);
+    }
+  });
+  return out;
+}
 // 企業法の小単元（テキスト①②の目次の □□□ の項目）。理論科目は小単元ごとに復習する。
 // 各回の先頭のミニテストは進度表のミニテスト欄（配布のみ）のとおり: 第2〜19回の最初に第1〜18回を解く。
 // 各小単元は、その終わりのページ（次の小単元の開始ページの前）を含む講義（進度表のページ範囲）に付ける。
 // 講義の途中で終わらない小単元は、最後まで終わる講義に付く（例: 株主総会 P.35〜104 → 第4回）。
-const CPA_LAW_TRAININGS = [
+const CPA_LAW_TRAININGS = withLawPerLecture([
   ["入門基礎マスター", 1, ["重要な定義 1. 定義規定（2条）のなかの重要な定義（意義）", "重要な定義 2. それ以外の重要な定義（意義）"]],
   ["入門基礎マスター", 2, ["ミニテスト①", "会社法の意義", "会社の概念 1. 会社の意義", "会社の概念 2. 会社の営利性", "会社の概念 3. 会社の社団性", "会社の概念 4. 会社の法人性〜会社の目的と権利能力", "株式会社の意義と特色 1. 株式会社の意義", "株式会社の意義と特色 2. 株式", "株式会社の意義と特色 3. 株主の有限責任（104条）", "機関 1. 機関総説"]],
   ["入門基礎マスター", 3, ["ミニテスト②"]],
@@ -716,7 +733,7 @@ const CPA_LAW_TRAININGS = [
   ["入門基礎マスター", 18, ["ミニテスト⑰", "組織再編行為（手続以外） 4. 会社分割", "組織再編行為（手続以外） 5. 株式交換・株式移転", "組織再編行為（手続以外） 6. 株式交付", "組織再編行為（手続以外） 7. 組織変更", "組織再編行為の手続 1. 手続の概略", "組織再編行為の手続 2. 契約の締結・計画の作成", "組織再編行為の手続 3. 吸収型組織再編行為の手続", "組織再編行為の手続 4. 新設型組織再編行為の手続", "組織再編行為の手続 5. 持分会社における合併・会社分割・株式交換の手続", "組織再編行為の手続 6. 株式交付の手続", "組織再編行為の手続 7. 略式組織再編・簡易組織再編", "組織再編行為の手続 8. 株式買取請求権・新株予約権買取請求権", "組織再編行為の手続 9. 組織再編行為の差止請求権", "組織再編行為の手続 10. 債権者異議手続", "組織再編行為の手続 11. 組織再編行為の瑕疵", "組織再編行為の手続 12. 組織変更の手続", "株式会社の定款変更", "株式会社の解散・清算 1. 株式会社の解散→清算", "株式会社の解散・清算 2. 株式会社の解散", "株式会社の解散・清算 3. 株式会社の清算", "特例有限会社・外国会社 1. 特例有限会社", "特例有限会社・外国会社 2. 外国会社", "会社法総則（総論） 1. 会社のする行為は商行為", "会社法総則（総論） 2. 商法総則と会社法総則等の適用関係", "会社法総則（各論） 1. 会社の商号", "会社法総則（各論） 2. 会社の使用人", "会社法総則（各論） 3. 会社の代理商"]],
   ["入門基礎マスター", 19, ["ミニテスト⑱", "会社法総則（各論） 4. 商業登記", "商法総則 1. 商法典の適用範囲", "商法総則 2. その他", "商行為の概念 1. 絶対的商行為（501条）", "商行為の概念 2. 営業的商行為（502条）", "商行為の概念 3. 附属的商行為（503条1項）", "商行為の概念 4. 一方的商行為（3条）", "商行為法通則 1. 商行為の営利性", "商行為法通則 2. 商行為の代理・委任", "商行為法通則 3. 商事契約の成立", "商行為法通則 4. 商事債権の担保", "商行為法通則 5. 商事債権の消滅", "商行為法通則 6. 商事寄託における保管義務"]],
   ["入門基礎マスター", 20, ["売主保護の制度 1. 売主の供託権・自助売却権（524条）", "売主保護の制度 2. 買主の目的物の検査・通知義務（526条）", "売主保護の制度 3. 買主の目的物の保管・供託義務，競売義務", "売主保護の制度 4. 定期売買の履行遅滞による解除擬制（525条）", "交互計算 1. 交互計算の意義（529条）", "交互計算 2. 交互計算契約の経済的機能", "交互計算 3. 交互計算契約の効果", "交互計算 4. 交互計算契約の終了", "匿名組合 1. 匿名組合の意義（535条）", "匿名組合 2. 匿名組合の効力", "匿名組合 3. 匿名組合の終了", "企業補助者 1. 各企業補助者をめぐる基本的法律関係", "企業補助者 2. 代理商", "企業補助者 3. 仲立人", "企業補助者 4. 取次商〜問屋を中心に", "運送営業 1. 運送営業の意義", "運送営業 2. 物品運送契約", "運送営業 3. 運送人の損害賠償責任", "倉庫営業 1. 倉庫営業の意義・経済的機能", "倉庫営業 2. 倉庫営業者の義務・権利", "場屋営業者の責任 1. 場屋営業者の意義", "場屋営業者の責任 2. 場屋営業者の責任", "場屋営業者の責任 3. 高価品の特則（597条）", "場屋営業者の責任 4. 責任に係る債権の消滅時効（598条）"]]
-];
+]);
 // 監査論のミニテスト（入門）。進度表では第1〜4回の内容に第1〜4回のミニテストがあり、
 // ほかの科目と同じく次の回の最初（第2〜5回の講義の直前）に解く。
 const CPA_AUDIT_TRAININGS = [
@@ -729,6 +746,19 @@ const CPA_AUDIT_TRAININGS = [
 const CPA_TRAININGS = [["s_calc", CPA_CALC_TRAININGS], ["s_mgmt", CPA_MGMT_TRAININGS], ["s_law", CPA_LAW_TRAININGS], ["s_audit", CPA_AUDIT_TRAININGS]];
 // 受講してから1回目をやるまでの日数（計算科目は当日、理論科目の小単元の復習は翌日）
 const CPA_TRAINING_DELAY = { s_law: 1, s_theory: 1, s_audit: 1 };
+// 項目ごとの日数（科目の日数より優先）: 一問一答は授業の直後、短答問題集は翌日
+const CPA_ITEM_DELAY = [[/^一問一答/, 0], [/^短答問題集/, 1]];
+function cpaTrainingDelay(t) {
+  const hit = CPA_ITEM_DELAY.find(([re]) => re.test(t.text || ""));
+  return hit ? hit[1] : (CPA_TRAINING_DELAY[t.subjectId] || 0);
+}
+// 予定のタイトルに使う問題名。ミニテストは区分ごとに①から振り直されるので区分名を、
+// 回ごとの一問一答・短答問題集はどの回の範囲かが分かるように回を付ける。
+function cpaTrainingProblem(secTitle, n, item) {
+  if (/^ミニテスト/.test(item)) return `${secTitle} ${item}`;
+  if (CPA_LAW_PER_LECTURE.includes(item)) return `${item}（${secTitle} 第${n}回）`;
+  return item;
+}
 const CPA_TRAINING_MINUTES = 15; // トレーニング・ミニテスト1問の目安（分）
 // 作り直し前に解いた結果（ラダーの初期状態）。[科目id, 区分, 回, 問題, 解けたか]
 // 解けた → ◎（復習不要）、解けなかった → ✖️（翌日復習。復習タスクも入れる）。
@@ -778,8 +808,7 @@ function buildCpaTrainingTodos(todos, onlySubjects) {
     out.push({ id: pid, subjectId: sid, text: secTitle === "Web補講" ? secTitle : `${secTitle} 第${n}回`,
       minutes: null, status: "unwatched", done: false, track: "training", createdAt: ++seq });
     items.forEach(item => {
-      // ミニテストは区分ごとに①から振り直されるので、予定のタイトル用に区分名を付ける
-      const problem = /^ミニテスト/.test(item) ? `${secTitle} ${item}` : item;
+      const problem = cpaTrainingProblem(secTitle, n, item);
       const init = CPA_INITIAL_RESULTS.find(([s2, sec, no, it]) => s2 === sid && sec === secTitle && no === n && it === item);
       const r = init ? srApply(0, init[4], CPA_INITIAL_RESULT_DATE) : null;
       out.push({ id: genId(), subjectId: sid, parentId: pid, text: item, problem,
@@ -826,16 +855,19 @@ function missingCpaTrainingTodos(todos) {
     items.forEach((item, i) => {
       if (parent && all().some(t => t.parentId === parent.id && t.text === item)) return;
       if (!parent) {
-        // 回の入れ物が無ければ、前の回の入れ物の直後に並ぶように作る
+        // 回の入れ物が無ければ、前の回の入れ物の直後に並ぶように作る。
+        // 前の回も今回足したもの（または無い）なら、その科目のトレーニングの最後に並べる。
         const prevP = todos.find(t => t.subjectId === sid && t.track === "training" && !t.parentId && t.text === `${secTitle} 第${n - 1}回`);
+        const lastSeq = all().filter(t => t.subjectId === sid && t.track === "training")
+          .reduce((m, t) => Math.max(m, t.createdAt || 0), 0);
         parent = { id: genId(), subjectId: sid, text: ptext, minutes: null, status: "unwatched", done: false,
-          track: "training", createdAt: (prevP ? prevP.createdAt : 0) + 0.5 };
+          track: "training", createdAt: prevP ? prevP.createdAt + 0.5 : lastSeq + 1 };
         out.push(parent);
       }
       const kids = all().filter(t => t.parentId === parent.id);
       const firstSeq = kids.reduce((m, t) => Math.min(m, t.createdAt || 0), (parent.createdAt || 0) + 1);
       out.push({ id: genId(), subjectId: sid, parentId: parent.id, text: item,
-        problem: /^ミニテスト/.test(item) ? `${secTitle} ${item}` : item,
+        problem: cpaTrainingProblem(secTitle, n, item),
         minutes: CPA_TRAINING_MINUTES, track: "training", status: "unwatched", done: false,
         lectureTodoId: lec ? lec.id : null,
         // 対応表で前にある項目（ミニテストは先頭）が先に並ぶようにする
@@ -849,6 +881,7 @@ function missingCpaTrainingTodos(todos) {
 // まだ解いていない（未完了・マーク無し）で、未完了の予定も無い問題だけを対象にする。
 // lectureTask（完了した講義の予定）を渡すと、当日に解く科目（計算科目）のトレーニングは
 // 講義と同じ日のリストに入れ、講義のすぐ後ろに並ぶようにする（followsTaskId。古い日付の講義でも同じ）。
+// 当日か翌日かは項目ごとに決まる（cpaTrainingDelay。企業法の一問一答は当日、短答問題集・小単元は翌日）。
 function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date, lectureTask) {
   if (!lectureTodoId) return [];
   const subjName = (sid) => (CPA_LECTURE_SUBJECTS.find(x => x.id === sid) || {}).name || "";
@@ -858,7 +891,7 @@ function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date, lectu
     .filter(t => t.lectureTodoId === lectureTodoId && !t.done && !t.understanding && !pending.has(t.id) && !/^ミニテスト/.test(t.text))
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
     .map(t => {
-      const delay = CPA_TRAINING_DELAY[t.subjectId] || 0;
+      const delay = cpaTrainingDelay(t);
       const sameList = !delay && lectureTask;
       return { t, d: sameList ? lectureTask.date : addDays(date, delay),
         od: sameList ? (lectureTask.originalDate || lectureTask.date) : addDays(date, delay) };
@@ -870,6 +903,26 @@ function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date, lectu
       kind: "study", subjectId: t.subjectId, subjectTodoId: t.id, originalDate: od,
       ...(lectureTask ? { followsTaskId: lectureTask.id } : {}),
     }));
+}
+
+// 講義を受講済みにしたときに入れたトレーニングの説明（受講済みの確認画面に出す行の配列）。
+// 講義と同じ日のもの（講義のすぐ後ろ）と、別の日のもの（翌日）に分けて書く。
+function describeLectureTrainings(newTr, lectureDate, subjectTodos) {
+  const label = (list) => {
+    const todos = list.map(x => subjectTodos.find(t => t.id === x.subjectTodoId) || {});
+    const named = CPA_LAW_PER_LECTURE.filter(nm => todos.some(t => t.text === nm));
+    const rest = todos.filter(t => !CPA_LAW_PER_LECTURE.includes(t.text));
+    const restLabel = !rest.length ? null
+      : CPA_TRAINING_DELAY[rest[0].subjectId] ? `この回で終わった小単元の復習 ${rest.length}件`
+      : `この回のトレーニング ${rest.length}問`;
+    return [...named, ...(restLabel ? [restLabel] : [])].join("・");
+  };
+  const same = newTr.filter(x => x.date === lectureDate);
+  const later = newTr.filter(x => x.date !== lectureDate);
+  return [
+    ...(same.length ? [`${label(same)}を、この講義のすぐ後ろに入れました`] : []),
+    ...(later.length ? [`${label(later)}を、明日の予定に入れました`] : []),
+  ];
 }
 
 // ミニテストは授業の最初に（前回の範囲を）解く。未受講の講義の予定ごとに、その回のミニテストを
@@ -2675,7 +2728,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
     // 講義はチェックだけで受講済みにする（解けた/解けなかったは聞かない）
     if (task.isLecture) {
       // その回のトレーニングを、講義と同じ日のリストの講義のすぐ後ろに入れる（受講したらすぐ解く）。
-      // 理論科目の小単元の復習は翌日に入る。
+      // 理論科目の小単元の復習・企業法の短答問題集は翌日に入る（企業法の一問一答は当日）。
       const newTr = trainingTasksForLecture(task.subjectTodoId, subjectTodos, tasks, todayStr(), task);
       setTasks(ts => [
         ...ts.map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString() } : t),
@@ -2688,7 +2741,8 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         setSubjectTodos(sts => sts.map(s => s.id === task.subjectTodoId ? { ...s, status: "done", done: true } : s));
       }
       setLectureExText("");
-      setLectureExModal({ ...task, trainingCount: newTr.length });
+      setLectureExModal({ ...task, trainingCount: newTr.length,
+        trainingNote: describeLectureTrainings(newTr, task.date, subjectTodos) });
       return;
     }
     // Open understanding modal
@@ -3764,9 +3818,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
             <div style={{ fontSize: 14, color: C.text, marginBottom: 10 }}>{lectureExModal.title}</div>
             {lectureExModal.trainingCount > 0 && (
               <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, marginBottom: 10 }}>
-                📝 {CPA_TRAINING_DELAY[lectureExModal.subjectId]
-                  ? `この回で終わった小単元の復習 ${lectureExModal.trainingCount}件を明日の予定に入れました`
-                  : `この回のトレーニング ${lectureExModal.trainingCount}問を、この講義のすぐ後ろに入れました`}
+                {lectureExModal.trainingNote.map((line, i) => <div key={i}>📝 {line}</div>)}
               </div>
             )}
             <div style={{ fontSize: 11, color: C.textMid, marginBottom: 6 }}>
@@ -8819,7 +8871,30 @@ function App() {
         return next;
       });
     };
+    // 版12: 企業法の一問一答・短答問題集を足し、もう受講した回の分は予定にも入れる
+    //   （一問一答は今日・今日受講した講義のすぐ後ろ、短答問題集は明日）。
+    //   ここで足した項目は addMissingTrainings では重複して足されない。
+    const scheduleLawPerLecture = () => {
+      const add = missingCpaTrainingTodos(subjectTodos);
+      if (!add.length) return;
+      setSubjectTodos(prev => [...prev, ...add.filter(a => !prev.some(t => t.id === a.id))]);
+      const today = todayStr();
+      const all = [...subjectTodos, ...add];
+      const newTasks = [];
+      add.filter(t => t.subjectId === "s_law" && CPA_LAW_PER_LECTURE.includes(t.text) && t.lectureTodoId)
+        .forEach(t => {
+          const lec = all.find(x => x.id === t.lectureTodoId);
+          if (!lec || !lec.done || newTasks.some(x => x.lectureTodoId === lec.id)) return;
+          const lecTask = tasks.find(x => x.isLecture && x.subjectTodoId === lec.id && x.done && x.date === today);
+          const items = add.filter(x => x.lectureTodoId === lec.id && CPA_LAW_PER_LECTURE.includes(x.text));
+          trainingTasksForLecture(lec.id, items, tasks, today, lecTask)
+            .forEach(x => newTasks.push({ ...x, lectureTodoId: lec.id }));
+        });
+      if (!newTasks.length) return;
+      setTasks(prev => [...prev, ...newTasks.map(({ lectureTodoId, ...x }) => x)]);
+    };
     if (doneVersion >= 5) {
+      if (doneVersion < 12) scheduleLawPerLecture();
       addMissingTrainings();
       applyInitialResults();
       fixMiniLinks();
