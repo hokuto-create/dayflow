@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261111-5';
+  const APP_VERSION = '20261111-6';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -511,7 +511,6 @@ const CPA_LECTURE_SUBJECTS = [
   ] },
   { id: "s_law", name: "企業法", color: "#4a8ed1", daily: true, sections: [
     { title: "入門基礎マスター", count: 20, dl: [[20, CPA_NOV]] },
-    { title: "上級講義", count: 12, dl: [[12, CPA_DEC]] },
   ] },
   { id: "s_audit", name: "監査論", color: "#3aa0d8", daily: true, startFrom: "2026-12-01", fillOnJitsu: true, sections: [
     { title: "入門", count: 5, dl: [[5, CPA_NOV]] },
@@ -522,7 +521,9 @@ const CPA_LECTURE_MINUTES = 180;
 // 作り直しの版。内容を変えたら上げる（未実行・旧版の端末で一度だけ作り直しが走る）。
 // 版3→4 は講義の開始日の変更だけなので、版3の端末は作り直さず講義の予定だけ並べ直す。
 // 版4→5 は財理の上級講義に第23回を足すだけなので、作り直さず足りない回を追加して予定に入れる。
-const CPA_REBUILD_VERSION = 14;
+const CPA_REBUILD_VERSION = 15;
+// 版14→15 は企業法の短答問題集の名前からも「入門基礎マスター」を外し、企業法の上級講義（講義・一問一答・短答問題集）をなくす
+//   （上級講義は基礎マスターで受けた範囲をすぐ受けるので、基礎マスターの回でまとめて回す）。
 // 版13→14 は企業法の一問一答の名前から「入門基礎マスター」を外す（「一問一答（第N回）」。TODOと予定の名前を書き換える）。
 // 版12→13 は企業法のテキストの小単元ごとの復習をやめる（TODOと未完了の予定を消す）。
 // 版11→12 は企業法の講義の回ごとに一問一答（授業の直後）・短答問題集（翌日）を足す（足りない項目だけを追加）。
@@ -755,9 +756,8 @@ function cpaTrainingDelay(t) {
 // 回ごとの一問一答・短答問題集はどの回の範囲かが分かるように回を付ける。
 function cpaTrainingProblem(secTitle, n, item) {
   if (/^ミニテスト/.test(item)) return `${secTitle} ${item}`;
-  // 企業法の一問一答は基礎マスターの回ごとなので区分名を省く（上級講義は区別のため残す）
-  if (item === "一問一答" && secTitle === "入門基礎マスター") return `${item}（第${n}回）`;
-  if (CPA_LAW_PER_LECTURE.includes(item)) return `${item}（${secTitle} 第${n}回）`;
+  // 企業法は入門基礎マスターだけなので区分名を省く
+  if (CPA_LAW_PER_LECTURE.includes(item)) return `${item}（第${n}回）`;
   return item;
 }
 const CPA_TRAINING_MINUTES = 15; // トレーニング・ミニテスト1問の目安（分）
@@ -829,6 +829,19 @@ function renameMgmtTrainingLabels(subjectTodos, tasks) {
 function isLawTextReview(t) {
   return t.subjectId === "s_law" && t.track === "training" && t.parentId
     && !CPA_LAW_PER_LECTURE.includes(t.text) && !/^ミニテスト/.test(t.text || "");
+}
+// 企業法の上級講義（講義TODO・トレーニングTODO）を消す（既存データ用・冪等）。未完了の予定も外し、完了済みは残す。
+function isLawAdvanced(t, todos) {
+  if (t.subjectId !== "s_law") return false;
+  const isSec = p => p && !p.parentId && (((p.track || "video") === "video" && p.text === "上級講義")
+    || (p.track === "training" && /^上級講義 第\d+回$/.test(p.text || "")));
+  return isSec(t) || (t.parentId && isSec(todos.find(p => p.id === t.parentId)));
+}
+function removeLawAdvanced(subjectTodos, tasks) {
+  const ids = new Set(subjectTodos.filter(t => isLawAdvanced(t, subjectTodos)).map(t => t.id));
+  const todosOut = ids.size ? subjectTodos.filter(t => !ids.has(t.id)) : subjectTodos;
+  const tasksOut = tasks.filter(x => !(x.subjectTodoId && ids.has(x.subjectTodoId) && !x.done));
+  return { subjectTodos: todosOut, tasks: tasksOut.length !== tasks.length ? tasksOut : tasks };
 }
 function removeLawTextReviews(subjectTodos, tasks) {
   const ids = new Set(subjectTodos.filter(isLawTextReview).map(t => t.id));
@@ -1213,16 +1226,6 @@ const CPA_LECTURE_CONTENT = [
   ["s_law", "入門基礎マスター", 18, [{"book": "テキスト②", "pages": "P.279〜390", "units": ["組織再編行為(2)", "定款変更", "特例有限会社・外国会社", "会社法総則"], "note": "ミニテスト 第17回（配布のみ）"}]],
   ["s_law", "入門基礎マスター", 19, [{"book": "テキスト②", "pages": "P.391〜430", "units": ["商法総則・商行為法(1)"], "note": "ミニテスト 第18回（配布のみ）"}]],
   ["s_law", "入門基礎マスター", 20, [{"book": "テキスト②", "pages": "P.431〜468", "units": ["商法総則・商行為法(2)"]}]],
-  ["s_law", "上級講義", 1, [{"book": "テキスト①", "pages": "P.9〜90", "units": ["会社法総論", "機関(1)"]}]],
-  ["s_law", "上級講義", 2, [{"book": "テキスト①", "pages": "P.91〜133", "units": ["機関(2)"]}]],
-  ["s_law", "上級講義", 3, [{"book": "テキスト①", "pages": "P.134〜272", "units": ["機関(3)"]}]],
-  ["s_law", "上級講義", 4, [{"book": "テキスト①", "pages": "P.273〜346", "units": ["機関(4)", "株式(1)"]}]],
-  ["s_law", "上級講義", 5, [{"book": "テキスト①", "pages": "P.347〜434", "units": ["株式(2)"]}]],
-  ["s_law", "上級講義", 6, [{"book": "テキスト①", "pages": "P.435〜478", "units": ["株式(3)"]}, {"book": "テキスト②", "pages": "P.1〜62", "units": ["設立(1)"]}]],
-  ["s_law", "上級講義", 7, [{"book": "テキスト②", "pages": "P.63〜152", "units": ["設立(2)", "資金調達(1)"]}]],
-  ["s_law", "上級講義", 8, [{"book": "テキスト②", "pages": "P.153〜212", "units": ["資金調達(2)", "計算"]}]],
-  ["s_law", "上級講義", 9, [{"book": "テキスト②", "pages": "P.213〜309", "units": ["持分会社", "組織再編行為(1)"]}]],
-  ["s_law", "上級講義", 10, [{"book": "テキスト②", "pages": "P.310〜468", "units": ["組織再編行為(2)"]}]],
   ["s_audit", "入門", 1, [{"units": ["第1章 財務諸表監査総論 第1節 財務諸表監査の理論と制度", "第1章 第2節 監査基準", "第1章 第3節 財務諸表監査の目的と機能"], "note": "ミニテスト 第1回"}]],
   ["s_audit", "入門", 2, [{"units": ["第1章 第4節 監査人", "第2章 監査の実施 第1節 監査実施の全体像", "第2章 第2節 監査意見と監査手続"], "note": "ミニテスト 第2回"}]],
   ["s_audit", "入門", 3, [{"units": ["第2章 第3節 内部統制と試査"], "note": "ミニテスト 第3回"}]],
@@ -8969,16 +8972,22 @@ function App() {
       // 関数形式では最新のTODOを取れないので、手元の一覧で対象を決めて予定を外す
       setTasks(prev => removeLawTextReviews(subjectTodos, prev).tasks);
     };
-    // 版14: 企業法の一問一答の名前から「入門基礎マスター」を外す（TODOの問題名と予定のタイトル）
+    // 版15: 企業法の上級講義をなくす（TODOと未完了の予定を消す）
+    const removeLawAdv = () => {
+      setSubjectTodos(prev => removeLawAdvanced(prev, []).subjectTodos);
+      setTasks(prev => removeLawAdvanced(subjectTodos, prev).tasks);
+    };
+    // 版14（版15で短答問題集も）: 企業法の一問一答の名前から「入門基礎マスター」を外す（TODOの問題名と予定のタイトル）
     const renameLawQA = () => {
-      const fix = x => (x || "").replace(/一問一答（入門基礎マスター (第\d+回)）/, "一問一答（$1）");
+      const fix = x => (x || "").replace(/(一問一答|短答問題集)（入門基礎マスター (第\d+回)）/, "$1（$2）");
       setSubjectTodos(prev => prev.map(t => t.subjectId === "s_law" && t.problem && fix(t.problem) !== t.problem ? { ...t, problem: fix(t.problem) } : t));
       setTasks(prev => prev.map(t => t.title && fix(t.title) !== t.title ? { ...t, title: fix(t.title) } : t));
     };
     if (doneVersion >= 5) {
       if (doneVersion < 12) scheduleLawPerLecture();
       if (doneVersion < 13) removeLawReviews();
-      if (doneVersion < 14) renameLawQA();
+      if (doneVersion < 15) renameLawQA();
+      if (doneVersion < 15) removeLawAdv();
       addMissingTrainings();
       applyInitialResults();
       fixMiniLinks();
