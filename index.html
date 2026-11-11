@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261111-2';
+  const APP_VERSION = '20261111-3';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -2888,13 +2888,18 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         const anchor = (x) => (x.precedesTaskId && byId.get(x.precedesTaskId) && !byId.get(x.precedesTaskId).done) ? byId.get(x.precedesTaskId) : x;
         const rank = (x) => x.followsTaskId && !x.isReview ? 0 : x.isReview ? 1 : 2;
         const order = new Map(tasks.map((x, i) => [x.id, i]));
+        // 同じ日・同じ時刻のもの同士は、科目の対応表の順（トレ① 4-1 → 4-2 → … → トレ①短 4-1）、
+        // 対応表に無いものはリストに入った順にする（以前は id で比べていて、id は乱数なので順番がバラバラになっていた）
+        const todoSeq = new Map(subjectTodos.map(x => [x.id, x.createdAt || 0]));
+        const seq = (x) => x.subjectTodoId && todoSeq.has(x.subjectTodoId) ? todoSeq.get(x.subjectTodoId) : Infinity;
+        const cmpSeq = (a, b) => { const p = seq(a), q = seq(b); return p === q ? 0 : p < q ? -1 : 1; };
         const list = tasks.filter(t => t.date === selectedDate && !t.done)
           .sort((a0, b0) => {
             const a = anchor(a0), b = anchor(b0);
             return rank(a) - rank(b)
               || oldKey(a).localeCompare(oldKey(b))
               || (a.hour ?? 99) - (b.hour ?? 99)
-              || (a.id !== b.id ? String(a.id).localeCompare(String(b.id)) : 0)
+              || (a.id !== b.id ? (cmpSeq(a, b) || order.get(a.id) - order.get(b.id)) : 0)
               || (a0 === a ? 1 : 0) - (b0 === b ? 1 : 0)
               || (rank(a) === 0 ? String(a.followsTaskId).localeCompare(String(b.followsTaskId)) : 0)
               || order.get(a0.id) - order.get(b0.id);
