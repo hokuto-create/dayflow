@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261111-6';
+  const APP_VERSION = '20261111-7';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -521,7 +521,8 @@ const CPA_LECTURE_MINUTES = 180;
 // 作り直しの版。内容を変えたら上げる（未実行・旧版の端末で一度だけ作り直しが走る）。
 // 版3→4 は講義の開始日の変更だけなので、版3の端末は作り直さず講義の予定だけ並べ直す。
 // 版4→5 は財理の上級講義に第23回を足すだけなので、作り直さず足りない回を追加して予定に入れる。
-const CPA_REBUILD_VERSION = 15;
+const CPA_REBUILD_VERSION = 16;
+// 版15→16 は企業法の一問一答の名前のかっこを外す（「一問一答 第N回」）。
 // 版14→15 は企業法の短答問題集の名前からも「入門基礎マスター」を外し、企業法の上級講義（講義・一問一答・短答問題集）をなくす
 //   （上級講義は基礎マスターで受けた範囲をすぐ受けるので、基礎マスターの回でまとめて回す）。
 // 版13→14 は企業法の一問一答の名前から「入門基礎マスター」を外す（「一問一答（第N回）」。TODOと予定の名前を書き換える）。
@@ -756,7 +757,8 @@ function cpaTrainingDelay(t) {
 // 回ごとの一問一答・短答問題集はどの回の範囲かが分かるように回を付ける。
 function cpaTrainingProblem(secTitle, n, item) {
   if (/^ミニテスト/.test(item)) return `${secTitle} ${item}`;
-  // 企業法は入門基礎マスターだけなので区分名を省く
+  // 企業法は入門基礎マスターだけなので区分名を省く（一問一答はかっこも付けない）
+  if (item === "一問一答") return `${item} 第${n}回`;
   if (CPA_LAW_PER_LECTURE.includes(item)) return `${item}（第${n}回）`;
   return item;
 }
@@ -8977,16 +8979,17 @@ function App() {
       setSubjectTodos(prev => removeLawAdvanced(prev, []).subjectTodos);
       setTasks(prev => removeLawAdvanced(subjectTodos, prev).tasks);
     };
-    // 版14（版15で短答問題集も）: 企業法の一問一答の名前から「入門基礎マスター」を外す（TODOの問題名と予定のタイトル）
+    // 版14（版15で短答問題集も、版16で一問一答のかっこも）: 企業法の一問一答の名前から「入門基礎マスター」を外す（TODOの問題名と予定のタイトル）
     const renameLawQA = () => {
-      const fix = x => (x || "").replace(/(一問一答|短答問題集)（入門基礎マスター (第\d+回)）/, "$1（$2）");
+      const fix = x => (x || "").replace(/(一問一答|短答問題集)（入門基礎マスター (第\d+回)）/, "$1（$2）")
+        .replace(/一問一答（(第\d+回)）/, "一問一答 $1");
       setSubjectTodos(prev => prev.map(t => t.subjectId === "s_law" && t.problem && fix(t.problem) !== t.problem ? { ...t, problem: fix(t.problem) } : t));
       setTasks(prev => prev.map(t => t.title && fix(t.title) !== t.title ? { ...t, title: fix(t.title) } : t));
     };
     if (doneVersion >= 5) {
       if (doneVersion < 12) scheduleLawPerLecture();
       if (doneVersion < 13) removeLawReviews();
-      if (doneVersion < 15) renameLawQA();
+      if (doneVersion < 16) renameLawQA();
       if (doneVersion < 15) removeLawAdv();
       addMissingTrainings();
       applyInitialResults();
