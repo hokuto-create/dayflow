@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261112-2';
+  const APP_VERSION = '20261112-3';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -485,6 +485,7 @@ function planOneProblemPerDay(tasks, today) {
    ・extra: 番号の後ろに続く回（財計入門の「補講」など）
    ・dl: 受講期限 [[この回まで, 期限日], ...]（オレンジ線=11月末、緑線=12月末。財計は期限を設けない）
    ・daily: true の科目は日曜を除き1日1コマずつ、未受講の回を順番に予定へ入れる
+     （weekdays があればその曜日だけ。0=日〜6=土。dateOverrides は日付ごとの例外: true=受ける / false=受けない）
      （startFrom があればその日から。財理・監査論は12月から受け始める）
    ・fillOnJitsu: startFrom より前は、他の科目が「実」（実力テスト）の日にだけ1コマ受ける
      （監査論: 11月は他科目の実力テストの日に受ける。実力テスト1回につき1コマ） */
@@ -509,7 +510,9 @@ const CPA_LECTURE_SUBJECTS = [
     { title: "上級講義", count: 11, dl: [[11, CPA_DEC]] },
     { title: "Web補講", count: 3, dl: [[3, CPA_DEC]] },
   ] },
-  { id: "s_law", name: "企業法", color: "#4a8ed1", daily: true, sections: [
+  // 企業法は2日に1コマ（月水金）。11/9の週は例外で、金曜（11/13）でなく土曜（11/14）に1コマ受ける。
+  { id: "s_law", name: "企業法", color: "#4a8ed1", daily: true, weekdays: [1, 3, 5],
+    dateOverrides: { "2026-11-13": false, "2026-11-14": true }, sections: [
     { title: "入門基礎マスター", count: 20, dl: [[20, CPA_NOV]] },
   ] },
   { id: "s_audit", name: "監査論", color: "#3aa0d8", daily: true, startFrom: "2026-12-01", fillOnJitsu: true, sections: [
@@ -521,7 +524,8 @@ const CPA_LECTURE_MINUTES = 180;
 // 作り直しの版。内容を変えたら上げる（未実行・旧版の端末で一度だけ作り直しが走る）。
 // 版3→4 は講義の開始日の変更だけなので、版3の端末は作り直さず講義の予定だけ並べ直す。
 // 版4→5 は財理の上級講義に第23回を足すだけなので、作り直さず足りない回を追加して予定に入れる。
-const CPA_REBUILD_VERSION = 18;
+const CPA_REBUILD_VERSION = 19;
+// 版18→19 は企業法を月水金（11/9の週だけ金曜でなく土曜）に変えるので、未受講の企業法の講義の予定だけ並べ直す。
 // 版17→18 は講義で登録した「復習したい例題」の予定のタイトルに科目名を入れる（「復習: 企業法 入門 例題2-3」）。
 // 版16→17 は企業法の短答問題集の名前のかっこも外す（「短答問題集 第N回」）。
 // 版15→16 は企業法の一問一答の名前のかっこを外す（「一問一答 第N回」）。
@@ -1018,8 +1022,37 @@ function planMiniTestTasks(tasks, subjectTodos) {
   return { add, moves };
 }
 
+// その科目の講義を受ける日か（weekdays があればその曜日だけ、無ければ日曜以外。dateOverrides の日付は例外）
+function cpaLectureDayOk(subj, d) {
+  if (subj.dateOverrides && d in subj.dateOverrides) return subj.dateOverrides[d];
+  const dow = new Date(d + "T00:00:00").getDay();
+  return subj.weekdays ? subj.weekdays.includes(dow) : dow !== 0;
+}
+// d 以降で最初の講義を受ける日
+function nextCpaLectureDay(subj, d) {
+  let guard = 0;
+  while (!cpaLectureDayOk(subj, d) && guard++ < 14) d = addDays(d, 1);
+  return d;
+}
+// 未受講の講義の予定を、受講日の決まり（cpaLectureDayOk）に合わせて start から順に置き直す（純関数）。
+// 予定のidはそのまま（ミニテストなど講義に紐づく予定が付いてくる）。返り値: [{ taskId, subjectId, todoId, date }]
+function rescheduleCpaLectureTasks(tasks, subjectTodos, subjectId, start) {
+  const subj = CPA_LECTURE_SUBJECTS.find(x => x.id === subjectId);
+  if (!subj) return [];
+  const order = new Map(subjectTodos.map(t => [t.id, t.createdAt || 0]));
+  const pend = tasks.filter(t => t.isLecture && !t.done && t.subjectId === subjectId)
+    .sort((a, b) => (order.get(a.subjectTodoId) || 0) - (order.get(b.subjectTodoId) || 0));
+  let d = subj.startFrom && subj.startFrom > start ? subj.startFrom : start;
+  return pend.map(t => {
+    d = nextCpaLectureDay(subj, d);
+    const out = { taskId: t.id, subjectId, todoId: t.subjectTodoId, date: d };
+    d = addDays(d, 1);
+    return out;
+  });
+}
+
 // daily な科目の未受講の回を、start（科目に startFrom があれば遅い方）から
-// 日曜を除いて1日1コマずつ順番に置く。
+// 受講日（日曜以外、weekdays があればその曜日）に1日1コマずつ順番に置く。
 // 返り値: 予定タスクの配列（科目ごとに独立して並べるので、同じ日に複数科目が並ぶ）。
 function scheduleCpaLectures(todos, start) {
   const out = [];
@@ -1045,7 +1078,7 @@ function scheduleCpaLectures(todos, start) {
           });
           return;
         }
-        while (new Date(d + "T00:00:00").getDay() === 0) d = addDays(d, 1);
+        d = nextCpaLectureDay(subj, d);
         out.push({
           id: genId(), date: d, title: `${subj.name} ${p.text} ${c.text}`,
           hour: null, duration: CPA_LECTURE_MINUTES / 60, priority: "medium",
@@ -9034,7 +9067,19 @@ function App() {
       if (!subj || t.title.startsWith(`復習: ${subj.name} `)) return t;
       return { ...t, title: `復習: ${subj.name} ${t.title.slice(4)}` };
     }));
+    // 版19: 企業法を月水金（11/9の週だけ金曜でなく土曜）に変えたので、未受講の企業法の講義の予定を今日から並べ直す
+    const rescheduleLaw = () => {
+      const moves = rescheduleCpaLectureTasks(tasks, subjectTodos, "s_law", todayStr());
+      const byId = new Map(moves.map(m => [m.taskId, m.date]));
+      const changed = moves.filter(m => (tasks.find(t => t.id === m.taskId) || {}).date !== m.date);
+      if (!changed.length) return;
+      setTasks(prev => prev.map(t => byId.has(t.id) && !t.done && t.date !== byId.get(t.id)
+        ? { ...t, date: byId.get(t.id), originalDate: byId.get(t.id) } : t));
+      resyncPlanMarkers(changed.map(m => ({ todoId: m.todoId, subjectId: m.subjectId, date: m.date })),
+        setMonthlyPlans, setWeeklyPlans);
+    };
     if (doneVersion >= 5) {
+      if (doneVersion < 19) rescheduleLaw();
       if (doneVersion < 18) addSubjectToLectureExReviews();
       if (doneVersion < 12) scheduleLawPerLecture();
       if (doneVersion < 13) removeLawReviews();
@@ -9059,7 +9104,7 @@ function App() {
           const floor = subj.startFrom && subj.startFrom > start ? subj.startFrom : start;
           let d = lastDate[c.subjectId] ? addDays(lastDate[c.subjectId], 1) : floor;
           if (d < floor) d = floor;
-          while (new Date(d + "T00:00:00").getDay() === 0) d = addDays(d, 1);
+          d = nextCpaLectureDay(subj, d);
           lastDate[c.subjectId] = d;
           newTasks.push({
             id: genId(), date: d, title: `${subj.name} ${sec.text} ${c.text}`,
