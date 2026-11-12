@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261112-4';
+  const APP_VERSION = '20261113-1';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -94,7 +94,10 @@ const serif = "'Playfair Display', serif";
 
 /* ── HELPERS ── */
 const genId = () => Math.random().toString(36).slice(2, 9);
-const todayStr = () => new Date().toISOString().split("T")[0];
+// 日付は端末の現地時間で 'YYYY-MM-DD' にする（toISOString は UTC なので、日本時間 0〜9時に前日になってしまう）
+const localDateStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const parseLocalDate = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+const todayStr = () => localDateStr(new Date());
 const fmt2 = (n) => String(n).padStart(2, "0");
 const fmtTime = (h) => {
   const hh = Math.floor(h);
@@ -113,21 +116,21 @@ const DAYS_JA = ["日", "月", "火", "水", "木", "金", "土"];
 const MONTHS_JA = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
 
 function getWeekDates(baseDate) {
-  const d = new Date(baseDate);
+  const d = parseLocalDate(baseDate);
   const day = d.getDay();
   const mon = new Date(d);
   mon.setDate(d.getDate() - ((day + 6) % 7));
   return Array.from({ length: 7 }, (_, i) => {
     const x = new Date(mon);
     x.setDate(mon.getDate() + i);
-    return x.toISOString().split("T")[0];
+    return localDateStr(x);
   });
 }
 
 function addDays(dateStr, n) {
-  const d = new Date(dateStr);
+  const d = parseLocalDate(dateStr);
   d.setDate(d.getDate() + n);
-  return d.toISOString().split("T")[0];
+  return localDateStr(d);
 }
 
 /* ── 間隔反復（スペースド・リピティション）ラダー ──
@@ -7779,8 +7782,7 @@ function MonthView({ goals, monthlyPlans, setMonthlyPlans, weeklyPlans, setWeekl
   const thisMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const days = Array.from({ length: daysInMonth }, (_, i) => {
-    const d = new Date(year, month, i + 1);
-    return d.toISOString().split("T")[0];
+    return localDateStr(new Date(year, month, i + 1));
   });
   const weekDates = getWeekDates(selectedDate);
   const isViewingCurrentMonth = monthOffset === 0;
