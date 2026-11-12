@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261112-1';
+  const APP_VERSION = '20261112-2';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -8696,6 +8696,41 @@ async function describeHttpError(res) {
 // 同期データの項目（クラウドの data の中身）。分割取得で1項目ずつ取るときに使う。
 const SYNC_KEYS = ["tasks", "goals", "subjects", "subjectTodos", "monthlyPlans", "weeklyPlans", "reviews", "settings", "subjectCategories"];
 
+// 手元の変更をクラウドの新しいデータに重ねる（3者マージ）。
+// base: 最後にクラウドと一致していた内容、local: 今の手元、remote: クラウドの新しい内容。
+// 手元で足した・変えた・消したものだけを remote に当てる（id のある配列は1件ずつ、オブジェクトはキーごと）。
+// 同じものを両方で変えていたら手元を優先する。手元で変えていない項目はクラウドのまま。
+const syncSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function mergeSyncValue(base, local, remote) {
+  if (syncSame(local, base)) return remote;   // 手元は変えていない
+  if (syncSame(remote, base) || remote == null) return local; // クラウドは変わっていない
+  const hasIds = v => Array.isArray(v) && v.every(x => x && typeof x === "object" && x.id != null);
+  if (hasIds(base) && hasIds(local) && hasIds(remote)) {
+    const bm = new Map(base.map(x => [x.id, x]));
+    const lm = new Map(local.map(x => [x.id, x]));
+    const out = remote.filter(x => !(bm.has(x.id) && !lm.has(x.id))); // 手元で消したものは消す
+    const idx = new Map(out.map((x, i) => [x.id, i]));
+    local.forEach(x => {
+      const b = bm.get(x.id);
+      if (b && syncSame(b, x)) return;        // 手元で変えていない
+      if (idx.has(x.id)) out[idx.get(x.id)] = x; // 手元で変えた
+      else if (!b) { idx.set(x.id, out.length); out.push(x); } // 手元で足した（クラウドで消したものは戻さない）
+    });
+    return out;
+  }
+  const isObj = v => v && typeof v === "object" && !Array.isArray(v);
+  if (isObj(base) && isObj(local) && isObj(remote)) {
+    const out = { ...remote };
+    new Set([...Object.keys(base), ...Object.keys(local)]).forEach(k => {
+      if (syncSame(base[k], local[k])) return;
+      if (!(k in local)) delete out[k];
+      else out[k] = local[k];
+    });
+    return out;
+  }
+  return local;
+}
+
 // GET して JSON を返す。{ ok, json } / { ok: false, error, network, ms }。
 async function supaGet(query) {
   const t0 = Date.now();
@@ -8843,6 +8878,7 @@ function App() {
   const initialPulledRef = useRef(0);       // 初回取得を何回目まで開始したか（再試行の重複防止）
   const [pullDone, setPullDone] = useState(false); // 初回取得が終わったか（終わるまで送信しない）
   const lastPushedDataRef = useRef("");
+  const latestDataRef = useRef({});         // 最新の手元データ（取り込み時の重ね合わせ用）
   const cloudAtRef = useRef(0);             // 手元が把握しているクラウドの更新時刻（ミリ秒）
   const rcMergedRef = useRef(false);
 
@@ -9098,10 +9134,25 @@ function App() {
      ・アプリに戻ってきたとき（ホーム画面アプリは再起動しないことが多い）に更新時刻を確かめ、
        新しければ取り込む */
   // 取得した行を state に反映する。反映した内容は「送信済み」とみなし、そのまま送り返さない。
-  const applyCloudRow = (row) => {
+  // merge=true のときは、最後に同期してから手元で変えた分を消さずに重ねる（別の端末の更新を取り込むとき）。
+  const applyCloudRow = (row, merge) => {
     const d = row.data;
     // Handle legacy multi-workspace format by flattening from ws_cpa
-    const src = (d.workspaces && d.data) ? (d.data.ws_cpa || {}) : d;
+    const remoteSrc = (d.workspaces && d.data) ? (d.data.ws_cpa || {}) : d;
+    let src = remoteSrc;
+    if (merge && lastPushedDataRef.current) {
+      let base = null;
+      try { base = JSON.parse(lastPushedDataRef.current); } catch {}
+      if (base) {
+        const local = latestDataRef.current;
+        src = { ...remoteSrc };
+        SYNC_KEYS.forEach(k => {
+          if (local[k] === undefined) return;
+          const m = mergeSyncValue(base[k], local[k], remoteSrc[k]);
+          if (m !== undefined) src[k] = m;
+        });
+      }
+    }
     if (src.tasks) setTasks(src.tasks);
     if (src.goals) setGoals(src.goals);
     if (src.subjects) setSubjects(src.subjects);
@@ -9111,19 +9162,21 @@ function App() {
     if (src.reviews) setReviews(src.reviews);
     if (src.settings) setSettings(src.settings);
     if (src.subjectCategories) setSubjectCategories(src.subjectCategories);
+    // 「送信済み」はクラウドの内容にする（重ねた手元の変更は、このあと送信される）
     lastPushedDataRef.current = JSON.stringify({
-      tasks: src.tasks, goals: src.goals, subjects: src.subjects, subjectTodos: src.subjectTodos,
-      monthlyPlans: src.monthlyPlans, weeklyPlans: src.weeklyPlans, reviews: src.reviews,
-      settings: src.settings, subjectCategories: src.subjectCategories,
+      tasks: remoteSrc.tasks, goals: remoteSrc.goals, subjects: remoteSrc.subjects, subjectTodos: remoteSrc.subjectTodos,
+      monthlyPlans: remoteSrc.monthlyPlans, weeklyPlans: remoteSrc.weeklyPlans, reviews: remoteSrc.reviews,
+      settings: remoteSrc.settings, subjectCategories: remoteSrc.subjectCategories,
     });
     cloudAtRef.current = Date.parse(row.updated_at) || 0;
     setLastSyncedAt(Date.now());
   };
   // クラウドから取得して反映する。通信に成功したら true（クラウドに行が無い場合も true）。
-  const pullNow = async () => {
+  // merge=true: 手元で変えた分を残して取り込む（初回取得以外はこちら）
+  const pullNow = async (merge) => {
     const r = await cloudPull(syncEmail);
     if (!r.ok) { setSyncError(r.error); return false; }
-    if (r.row && r.row.data) applyCloudRow(r.row);
+    if (r.row && r.row.data) applyCloudRow(r.row, merge);
     setSyncError("");
     return true;
   };
@@ -9143,6 +9196,9 @@ function App() {
     });
   }, [syncEmail, syncRetry]);
 
+  // 取り込み中に手元で変えた分も重ねられるよう、最新の手元データを持っておく
+  latestDataRef.current = { tasks, goals, subjects, subjectTodos, monthlyPlans, weeklyPlans, reviews, settings, subjectCategories };
+
   // Push to cloud (debounced 3s) when data changes
   useEffect(() => {
     if (!syncEmail || !pullDone) return;
@@ -9157,8 +9213,9 @@ function App() {
       // 別の端末がより新しく書いていたら、送らずにそちらを取り込む
       const at = await cloudUpdatedAt(syncEmail);
       if (cancelled) return;
+      // 手元の変更は捨てずに、取り込んだ内容に重ねる（重ねた結果はこのあと送信される）
       if (at && at > cloudAtRef.current + 1000) {
-        const ok = await pullNow();
+        const ok = await pullNow(true);
         window.__dayflowPushPending = false;
         setSyncStatus(ok ? "synced" : "error");
         if (!ok) scheduleRetry();
@@ -9192,7 +9249,7 @@ function App() {
         const at = await cloudUpdatedAt(syncEmail);
         if (at && at > cloudAtRef.current + 1000 && !window.__dayflowPushPending) {
           setSyncStatus("syncing");
-          const ok = await pullNow();
+          const ok = await pullNow(true);
           setSyncStatus(ok ? "synced" : "error");
         }
       } finally { busy = false; }
