@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261113-1';
+  const APP_VERSION = '20261113-2';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -2965,14 +2965,18 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
           });
         const total = tasks.filter(t => t.date === selectedDate).length;
         // 表示中のタスクが完了・削除されたら、直前の並びでその次にあった（まだ残っている）タスクを出す
+        // 完了したタスクの id が focusId に残っている間は、直前の並び（focusOrderRef）を上書きしない。
+        // 上書きすると、完了後に再描画（モーダルを閉じる・同期など）が起きたとき手がかりが消えて先頭に戻ってしまう。
         let idx = list.findIndex(t => t.id === focusId);
         if (idx < 0) {
           const prev = focusOrderRef.current;
           const at = prev.indexOf(focusId);
           const nextId = at >= 0 ? prev.slice(at + 1).find(id => list.some(t => t.id === id)) : null;
           idx = Math.max(0, nextId ? list.findIndex(t => t.id === nextId) : 0);
+          if (at < 0) focusOrderRef.current = list.map(t => t.id);
+        } else {
+          focusOrderRef.current = list.map(t => t.id);
         }
-        focusOrderRef.current = list.map(t => t.id);
         const t = list[idx] || null;
         const nextT = list.length > 1 ? list[(idx + 1) % list.length] : null;
         const subj = t && subjects.find(s => s.id === t.subjectId);
