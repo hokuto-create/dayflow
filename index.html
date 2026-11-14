@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261113-2';
+  const APP_VERSION = '20261114-1';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -3117,12 +3117,19 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       {(() => {
         const today = todayStr();
         if (selectedDate !== today) return null;
-        const overdueReviews = tasks.filter(t => t.isReview && !t.done && t.date < today);
+        const isOverdueReview = t => t.isReview && !t.done && t.date < today;
+        const overdueReviews = tasks.filter(isOverdueReview);
         if (overdueReviews.length === 0) return null;
+        const carryAllReviewsToday = () => setTasks(ts => ts.map(t => isOverdueReview(t) ? { ...t, date: today, hour: null, originalDate: t.originalDate || t.date } : t));
         return (
           <div style={{ ...card(), marginBottom: 12, padding: 12, background: "#fff0eb", borderColor: C.red + "60" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.red, marginBottom: 8 }}>
-              🔁 期限超過の復習（{overdueReviews.length}件）— 今日に持ってくる？
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.red }}>
+                🔁 期限超過の復習（{overdueReviews.length}件）
+              </div>
+              <button onClick={carryAllReviewsToday} style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>
+                すべて今日に繰り越す
+              </button>
             </div>
             {!majorDelay && overdueReviews.slice(0, 5).map(t => {
               const subjData = t.subjectId && subjects.find(s => s.id === t.subjectId);
