@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261114-1';
+  const APP_VERSION = '20261114-2';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -2570,7 +2570,7 @@ function Nav({ view, setView, reviewPending }) {
 /* ══════════════════════════════════════════════════════
    DAY PLANNER VIEW
 ══════════════════════════════════════════════════════ */
-function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjects, subjectTodos, setSubjectTodos, settings, delayStats, majorDelay, onOpenRecovery, recoveryUndoFresh, onUndoRecovery }) {
+function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjects, subjectTodos, setSubjectTodos, settings, delayStats, majorDelay, onOpenRecovery, recoveryUndoFresh, onUndoRecovery, reviews, setReviews }) {
   // 大幅遅延バナーの科目チップ（遅れ時間の多い順）。タップでその科目だけのリカバリープランを開く。
   const delaySubjChips = Object.entries((delayStats && delayStats.perSubjectHours) || {})
     .map(([id, h]) => ({ subj: subjects.find(s => s.id === id), h }))
@@ -2936,6 +2936,32 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         <button onClick={() => setFocusMode(true)} title="この日のタスクを1つずつ大きく表示する"
           style={{ ...btn(false, C.accent, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap", color: C.accent, borderColor: C.accentSoft }) }}>◱ 1つ表示</button>
       </div>
+
+      {/* 勉強開始: 押した時刻をその日の振り返り記録（reviews[日付].startedAt）に残し、振り返り画面に「開始 → 最終完了」で出す。
+          タスクとは別に持つので達成率・完了数には影響しない。時刻はあとから直せる（押し忘れ用）。 */}
+      {(() => {
+        const startedAt = (reviews && reviews[selectedDate] || {}).startedAt || null;
+        const setStartedAt = (v) => setReviews(prev => ({ ...prev, [selectedDate]: { ...(prev[selectedDate] || {}), startedAt: v } }));
+        const isToday = selectedDate === todayStr();
+        if (!startedAt && !isToday) return null;
+        const hhmm = startedAt ? (() => { const d = new Date(startedAt); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; })() : "";
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            {startedAt ? <>
+              <span style={{ fontSize: 13, fontWeight: 700, color: C.green }}>▶ 勉強開始</span>
+              <input type="time" value={hhmm}
+                onChange={e => e.target.value && setStartedAt(new Date(`${selectedDate}T${e.target.value}:00`).toISOString())}
+                style={{ fontSize: 13, padding: "3px 6px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text }} />
+              <div style={{ flex: 1 }} />
+              <button onClick={() => { if (confirm("開始時刻の記録を取り消しますか？")) setStartedAt(null); }}
+                style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px" }) }}>取り消す</button>
+            </> : (
+              <button onClick={() => setStartedAt(new Date().toISOString())}
+                style={{ ...btn(true, C.green, { flex: 1, fontSize: 14, padding: "10px" }) }}>▶ 勉強開始</button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* 1つ表示: 画面いっぱいに今のタスクだけを出す。完了の確認モーダル（zIndex 100）はこの上に重なる */}
       {focusMode && (() => {
@@ -4405,6 +4431,14 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
     (a.doneAt ? 0 : 1) - (b.doneAt ? 0 : 1)
     || (a.doneAt && b.doneAt ? a.doneAt.localeCompare(b.doneAt) : (a.hour ?? 99) - (b.hour ?? 99)));
   const notDone = dayTasks.filter(t => !t.done);
+  // 勉強時間の範囲: 開始は「勉強開始」ボタンの記録、押し忘れた日は最初の完了時刻で代用する。終わりは最後の完了時刻。
+  const doneTimes = done.map(t => t.doneAt).filter(Boolean).sort();
+  const firstDoneAt = doneTimes[0] || null;
+  const lastDoneAt = doneTimes[doneTimes.length - 1] || null;
+  const startedAt = review.startedAt || null;
+  const spanStart = startedAt || firstDoneAt;
+  const hm = (iso) => new Date(iso).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+  const spanMin = spanStart && lastDoneAt ? Math.round((new Date(lastDoneAt) - new Date(spanStart)) / 60000) : null;
 
   // For a review task, derive the textbook (TX) label from its source todo.
   // Example problems (例題) are stored as children of a TX chapter and don't
@@ -4504,6 +4538,22 @@ function ReviewView({ tasks, setTasks, selectedDate, setSelectedDate, setView, s
           {completedAt ? "取り消す" : "振り返り完了 ✓"}
         </button>
       </div>
+
+      {/* 開始 → 最終完了 */}
+      {(spanStart || lastDoneAt) && (
+        <div style={{ ...card(), textAlign: "center" }}>
+          <div style={{ fontSize: 15, color: C.text, fontWeight: 700 }}>
+            開始 {spanStart ? hm(spanStart) : "—"}
+            {lastDoneAt && <> → 最終完了 {hm(lastDoneAt)}</>}
+            {spanMin != null && spanMin >= 0 && (
+              <span style={{ marginLeft: 6, color: C.accent }}>（{Math.floor(spanMin / 60)}時間{spanMin % 60}分）</span>
+            )}
+          </div>
+          {!startedAt && firstDoneAt && (
+            <div style={{ fontSize: 10, color: C.textDim, marginTop: 2 }}>※ 開始ボタンが押されていないため、最初の完了時刻を表示しています</div>
+          )}
+        </div>
+      )}
 
       {/* Stats */}
       <div style={{ ...card(), display: "flex", gap: 16 }}>
@@ -9445,7 +9495,7 @@ function App() {
       {/* Views */}
       <div style={{ flex: 1 }}>{/* ページ全体（window）がスクロールするので、ここはスクロール領域にしない（右側パネルの sticky を効かせるため） */}
         {view === "day"    && <DayView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} goals={goals} subjects={subjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} settings={settings}
-          delayStats={delayStats} majorDelay={majorDelay} onOpenRecovery={openRecovery} recoveryUndoFresh={recoveryUndoFresh} onUndoRecovery={undoRecovery} />}
+          delayStats={delayStats} majorDelay={majorDelay} onOpenRecovery={openRecovery} recoveryUndoFresh={recoveryUndoFresh} onUndoRecovery={undoRecovery} reviews={reviews} setReviews={setReviews} />}
         {view === "review" && <ReviewView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} setView={setView} subjects={subjects} subjectTodos={subjectTodos} settings={settings} goals={goals} reviews={reviews} setReviews={setReviews} />}
         {view === "subjects" && <SubjectsView subjects={subjects} setSubjects={setSubjects} subjectTodos={subjectTodos} setSubjectTodos={setSubjectTodos} monthlyPlans={monthlyPlans} setMonthlyPlans={setMonthlyPlans} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} goals={goals} subjectCategories={subjectCategories} setSubjectCategories={setSubjectCategories} settings={settings} onOpenRecovery={openRecovery} />}
         {view === "week"   && <WeekView tasks={tasks} setTasks={setTasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} weeklyPlans={weeklyPlans} setWeeklyPlans={setWeeklyPlans} subjects={subjects} subjectTodos={subjectTodos} setView={setView} settings={settings} />}
