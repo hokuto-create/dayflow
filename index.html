@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261114-2';
+  const APP_VERSION = '20261118-1';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -136,6 +136,7 @@ function addDays(dateStr, n) {
 /* ── 間隔反復（スペースド・リピティション）ラダー ──
    解けた/解けなかったの2択で、マークが ✖️→△→○→◎ と1段ずつ自動で進む。
    ・初回に解けた → 復習不要（◎扱い）
+   ・初回（講義後に解くトレーニングの1回目）だけ「不安」も選べる → ✖️を1段飛ばして△（3日後に復習）
    ・解けなかった → ✖️（どの段階からでも✖️に戻る）。翌日復習。
    ・✖️で解けた → △（3日後に復習）
    ・△で解けた → ○（1週間後に復習）
@@ -150,11 +151,18 @@ const SR_MARK = {
   3: { mark: "○", short: "○",  label: "1週間後に復習", color: C.blue },
   4: { mark: "◎", short: "◎",  label: "復習不要",     color: C.green },
 };
-// 現在のマーク(understanding)と結果(solved)から、次のマークと次回復習日を返す
+// 「不安（△）」の結果。solved に true/false の代わりに渡す（トレーニングの1回目だけ選べる）。
+const SR_UNSURE = "unsure";
+// 「不安」を選べるか: トレーニングのTODOで、まだ1度も解いていない（未着手）とき。
+function canMarkUnsure(todo, cur) {
+  return !!todo && todo.track === "training" && !!todo.parentId && !cur;
+}
+// 現在のマーク(understanding)と結果(solved: true/false/SR_UNSURE)から、次のマークと次回復習日を返す
 function srApply(understanding, solved, base) {
   const cur = understanding || 0; // 0=未着手
   let mark;
-  if (!solved) mark = 1;            // 解けなかった → ✖️
+  if (solved === SR_UNSURE) mark = cur === 0 ? 2 : 1; // 初回の不安 → △（✖️を飛ばす）。初回以外は✖️扱い
+  else if (!solved) mark = 1;       // 解けなかった → ✖️
   else if (cur === 0) mark = 4;     // 初回で解けた → 復習不要（◎）
   else mark = Math.min(cur + 1, 4); // ✖️→△→○→◎
   return { understanding: mark, reviewDue: mark >= 4 ? null : addDays(base, SR_INTERVAL[mark]) };
@@ -3981,11 +3989,13 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         const curInfo = rcOnly ? null : SR_MARK[cur];
         const okNext = SR_MARK[srApply(cur, true, todayStr()).understanding];
         const ngNext = SR_MARK[srApply(cur, false, todayStr()).understanding];
+        const unsureNext = SR_MARK[srApply(cur, SR_UNSURE, todayStr()).understanding];
         const CHOICES = rcOnly ? [
           { solved: true,  title: "1発で解けた",   sub: "記録のみ", color: C.green },
           { solved: false, title: "解けなかった", sub: "記録のみ", color: C.red },
         ] : [
           { solved: true,  title: "解けた",       sub: `→ ${okNext.mark}（${okNext.label}）`, color: C.green },
+          ...(canMarkUnsure(td, cur) ? [{ solved: SR_UNSURE, title: "不安", sub: `→ ${unsureNext.mark}（${unsureNext.label}）`, color: C.yellow }] : []),
           { solved: false, title: "解けなかった", sub: `→ ${ngNext.mark}（${ngNext.label}）`, color: C.red },
         ];
         return (
@@ -4044,7 +4054,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                       width: 40, height: 40, borderRadius: "50%", background: ch.color,
                       color: "#fff", fontWeight: 700, fontSize: 18,
                       display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                    }}>{ch.solved ? "○" : "✕"}</div>
+                    }}>{ch.solved === SR_UNSURE ? "△" : ch.solved ? "○" : "✕"}</div>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{ch.title}</div>
                       <div style={{ fontSize: 11, color: C.textMid }}>{ch.sub}</div>
@@ -7087,6 +7097,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
         const curInfo = rcOnly ? null : SR_MARK[cur];
         const CHOICES = [
           { solved: true,  label: rcOnly ? "1発で解けた" : "解けた", mark: rcOnly ? null : SR_MARK[srApply(cur, true, todayStr()).understanding], color: C.green, icon: "○" },
+          ...(!rcOnly && canMarkUnsure(todo, cur) ? [{ solved: SR_UNSURE, label: "不安", mark: SR_MARK[srApply(cur, SR_UNSURE, todayStr()).understanding], color: C.yellow, icon: "△" }] : []),
           { solved: false, label: "解けなかった", mark: rcOnly ? null : SR_MARK[srApply(cur, false, todayStr()).understanding], color: C.red, icon: "✕" },
         ];
         const submit = () => {
@@ -7107,7 +7118,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 {rcOnly ? "1発で解けたかを記録します（復習・練習の予定は作りません）" : <>現在: {curInfo ? `${curInfo.mark}（${curInfo.label}）` : "未着手"}</>}
               </div>
               {/* 結果（解けた/解けなかった）— 切り替え可能 */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              <div style={{ display: "flex", flexDirection: CHOICES.length > 2 ? "column" : "row", gap: 8, marginBottom: 14 }}>
                 {CHOICES.map(ch => {
                   const active = resultModal.solved === ch.solved;
                   return (
