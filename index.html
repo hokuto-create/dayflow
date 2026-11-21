@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261121-2';
+  const APP_VERSION = '20261121-3';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -145,7 +145,30 @@ function addDays(dateStr, n) {
 const SR_INTERVAL = { 1: 1, 2: 3, 3: 7 }; // ✖️→翌日, △→3日後, ○→1週間後
 // 赤チャート専用: 例題が◎(完璧)になってから「練習」を開始するまでの待機日数。
 const PRACTICE_DELAY_DAYS = 14; // 2週間後に練習へ
-const RC_PRACTICE = false; // 系統ローテーションの1日1題では練習を作らない（例題だけ）
+const RC_PRACTICE = true; // 赤チャート: 例題が◎になったら2週間後に練習を入れる（1日1題とは別枠）
+// 赤チャートの例題が◎になったときの「練習」（例題と1対1、独自の間隔反復ラダー）。
+// 対象外（赤チャートの例題でない・練習を作成済み）なら null。
+// 返り値 { exampleId, todo: 練習TODO, task: 2週間後の練習タスク }。
+function rcPracticeFor(ex, base, subjects, goalId) {
+  if (!RC_PRACTICE || !ex || !(ex.subjectId || "").startsWith("rc_")
+    || !/^例題/.test(ex.text || "") || ex.practiceTodoId) return null;
+  // 「例題12 ○○」→「練習12 ○○」（番号・サブタイトルはそのまま流用）
+  const todo = {
+    id: genId(), subjectId: ex.subjectId, parentId: ex.parentId,
+    text: ex.text.replace(/^例題/, "練習"), minutes: ex.minutes ?? null,
+    status: "unwatched", done: false, createdAt: Date.now(),
+    understanding: null, reviewDue: null, practiceOf: ex.id,
+  };
+  const date = addDays(base, PRACTICE_DELAY_DAYS);
+  const task = {
+    id: genId(), date, title: buildTaskTitle(todo, subjects),
+    hour: null, duration: ex.minutes ? Math.max(1/60, ex.minutes / 60) : 1, priority: "medium",
+    actual: null, done: false, note: "", goalId: goalId || null,
+    kind: "study", subjectId: ex.subjectId, subjectTodoId: todo.id,
+    isPractice: true, originalDate: date,
+  };
+  return { exampleId: ex.id, todo, task };
+}
 const SR_MARK = {
   1: { mark: "✕", short: "✖️", label: "翌日復習",     color: C.red },
   2: { mark: "△", short: "△",  label: "3日後に復習",  color: C.yellow },
@@ -497,7 +520,7 @@ function planOneProblemPerDay(tasks, today) {
    分野のつながりで3系統に分け、曜日ごとに系統を変えて1日1題ずつ例題を予定に入れる（日曜は予備日で入れない）。
    ・月・木: 関数・解析 / 火・金: 図形 / 水・土: 離散・代数
    ・各系統の中は chapters の順（教材の章 → 例題番号順）に進む
-   ・対象は「例題」だけ（練習・演習問題・総合演習は入れない）。解いた問題（マークあり・完了）は飛ばす
+   ・対象は「例題」だけ（演習問題・総合演習は入れない。練習は例題が◎になった2週間後に別枠で入る）。解いた問題は飛ばす
    ・解いた結果は間隔反復ラダー（✖️翌日→△3日後→○1週間後→◎）で復習が入る。復習は1日1題とは別枠
    ・予定は今日から RC_HORIZON_DAYS 日先までを常に入れておき、起動時・データ変更時に詰め直す
      （解かずに過ぎた日の問題や、一覧で解けた登録をした問題の分は、同じ系統の次の日へ順に詰める） */
@@ -2895,38 +2918,12 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         isReview: true, reviewOf: task.id, originalDate: reviewDate,
       }]);
     }
-    // 赤チャートの例題が◎(完璧)に到達したら、対応する「練習」を2週間後に開始する。
-    // 練習は例題と1対1で、例題とは別TODOとして独自の間隔反復ラダーを持つ。
+    // 赤チャートの例題が◎(完璧)に到達したら、対応する「練習」を2週間後に開始する（rcPracticeFor）。
     if (done && task.subjectTodoId) {
-      const ex = subjectTodos.find(x => x.id === task.subjectTodoId);
-      // 系統ローテーションの1日1題にしてからは練習を作らない（RC_PRACTICE）
-      const isRedChartExample = RC_PRACTICE && ex && (ex.subjectId || "").startsWith("rc_")
-        && /^例題/.test(ex.text || "") && !ex.practiceTodoId;
-      if (isRedChartExample) {
-        const practiceId = genId();
-        // 「例題12 ○○」→「練習12 ○○」（番号・サブタイトルはそのまま流用）
-        const practiceTodo = {
-          id: practiceId, subjectId: ex.subjectId, parentId: ex.parentId,
-          text: ex.text.replace(/^例題/, "練習"), minutes: ex.minutes ?? null,
-          status: "unwatched", done: false, createdAt: Date.now(),
-          understanding: null, reviewDue: null, practiceOf: ex.id,
-        };
-        // 例題に練習IDを記録して二重生成を防ぎつつ、練習TODOを追加する。
-        setSubjectTodos(sts => [
-          ...sts.map(s => s.id === ex.id ? { ...s, practiceTodoId: practiceId } : s),
-          practiceTodo,
-        ]);
-        // 2週間後に練習タスクをスケジュール。完了時は completeWithUnderstanding が走り、
-        // 練習自身がラダー(✖️→△→○→◎)で復習管理される。
-        const practiceDur = ex.minutes ? Math.max(1/60, ex.minutes / 60) : 1;
-        setTasks(ts => [...ts, {
-          id: genId(), date: addDays(base, PRACTICE_DELAY_DAYS),
-          title: buildTaskTitle(practiceTodo, subjects),
-          hour: null, duration: practiceDur, priority: "medium",
-          actual: null, done: false, note: "", goalId: task.goalId,
-          kind: "study", subjectId: ex.subjectId, subjectTodoId: practiceId,
-          isPractice: true, originalDate: addDays(base, PRACTICE_DELAY_DAYS),
-        }]);
+      const pr = rcPracticeFor(subjectTodos.find(x => x.id === task.subjectTodoId), base, subjects, task.goalId);
+      if (pr) {
+        setSubjectTodos(sts => [...sts.map(s => s.id === pr.exampleId ? { ...s, practiceTodoId: pr.todo.id } : s), pr.todo]);
+        setTasks(ts => [...ts, pr.task]);
       }
     }
     setUnderstandingModal(null);
@@ -5434,9 +5431,13 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
     }
     const r = srApply(todo.understanding, solved, base);
     const done = r.understanding >= 4; // ◎=復習不要=完了扱い
-    setSubjectTodos(ts => ts.map(t => t.id === id
-      ? { ...t, understanding: r.understanding, reviewDue: r.reviewDue, status: done ? "done" : "reviewing", done }
-      : t));
+    // 赤チャートの例題が◎になったら2週間後に練習を入れる（DayView の completeWithUnderstanding と同じ）
+    const pr = done ? rcPracticeFor(todo, base, subjects, null) : null;
+    setSubjectTodos(ts => [...ts.map(t => t.id === id
+      ? { ...t, understanding: r.understanding, reviewDue: r.reviewDue, status: done ? "done" : "reviewing", done,
+          ...(pr ? { practiceTodoId: pr.todo.id } : {}) }
+      : t), ...(pr ? [pr.todo] : [])]);
+    if (pr) setTasks(ts => [...ts, pr.task]);
     // 振り返りの「完了」に表示されるよう、当日のタスクとして記録する。
     // 既に当日その論点のタスクがあれば完了＋時間を上書きし、無ければ完了タスクを新規作成する。
     // ◎（復習不要）に達していなければ、DayView側の completeWithUnderstanding と同様に
@@ -8899,7 +8900,7 @@ function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, set
             <span style={{ flex: 1 }}>
               <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>1日1題にする</span>
               <span style={{ display: "block", fontSize: 10, color: C.textDim, marginTop: 1 }}>
-                系統ごとに曜日を分けて1日1題（月木=関数・解析、火金=図形、水土=離散・代数、日曜は予備日）。まだ解いていない例題を8週間先まで自動で入れ、解けなかった問題は復習（翌日→3日後→1週間後）が別に入ります。
+                系統ごとに曜日を分けて1日1題（月木=関数・解析、火金=図形、水土=離散・代数、日曜は予備日）。まだ解いていない例題を8週間先まで自動で入れ、解けなかった問題は復習（翌日→3日後→1週間後）が、◎になった例題には2週間後に練習が別に入ります。
               </span>
             </span>
           </button>
