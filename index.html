@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261118-1';
+  const APP_VERSION = '20261121-1';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -145,6 +145,7 @@ function addDays(dateStr, n) {
 const SR_INTERVAL = { 1: 1, 2: 3, 3: 7 }; // ✖️→翌日, △→3日後, ○→1週間後
 // 赤チャート専用: 例題が◎(完璧)になってから「練習」を開始するまでの待機日数。
 const PRACTICE_DELAY_DAYS = 14; // 2週間後に練習へ
+const RC_PRACTICE = false; // 系統ローテーションの1日1題では練習を作らない（例題だけ）
 const SR_MARK = {
   1: { mark: "✕", short: "✖️", label: "翌日復習",     color: C.red },
   2: { mark: "△", short: "△",  label: "3日後に復習",  color: C.yellow },
@@ -405,8 +406,11 @@ function isRedChartTask(t) { return !!(t.subjectId && String(t.subjectId).starts
    ・TODOの firstTry: true=1発で解けた / false=1発では解けなかった / 未定義=未記録
    ・記録しても復習タスク・練習タスクは作らない（間隔反復ラダーも使わない）
    ・月/週/日への追加・自動分配も赤チャートでは使わない */
-const RC_RECORD_ONLY = true;
+// 2026-11-21: 記録のみモードは終了し、系統ローテーションの1日1題＋間隔反復ラダーに戻した（下の RC_ROTATION）。
+const RC_RECORD_ONLY = false;
 const isRcRecordOnly = (subjectId) => RC_RECORD_ONLY && !!subjectId && String(subjectId).startsWith("rc_");
+// 赤チャートは系統ローテーションで自動的に予定へ入れるので、月/週/日への追加・自動分配のボタンは出さない。
+const isRcScheduled = (subjectId) => !!subjectId && String(subjectId).startsWith("rc_");
 
 // 記録のみモードへの移行（純関数）。
 // ・赤チャートの未完了タスク（例題・練習・復習すべて）をスケジュールから外す（完了済みの記録は残す）
@@ -487,6 +491,148 @@ function planOneProblemPerDay(tasks, today) {
     cursorBy.set(t.subjectId, addDays(d, 1));
   }
   return moves;
+}
+
+/* ── 赤チャート: 系統ローテーションの1日1題 ──
+   分野のつながりで3系統に分け、曜日ごとに系統を変えて1日1題ずつ例題を予定に入れる（日曜は予備日で入れない）。
+   ・月・木: 関数・解析 / 火・金: 図形 / 水・土: 離散・代数
+   ・各系統の中は chapters の順（教材の章 → 例題番号順）に進む
+   ・対象は「例題」だけ（練習・演習問題・総合演習は入れない）。解いた問題（マークあり・完了）は飛ばす
+   ・解いた結果は間隔反復ラダー（✖️翌日→△3日後→○1週間後→◎）で復習が入る。復習は1日1題とは別枠で、
+     日曜に当たる復習は月曜へ送る（rcReviewDate）
+   ・予定は今日から RC_HORIZON_DAYS 日先までを常に入れておき、起動時・データ変更時に詰め直す
+     （解かずに過ぎた日の問題や、一覧で解けた登録をした問題の分は、同じ系統の次の日へ順に詰める） */
+const RC_HORIZON_DAYS = 56; // 8週間先まで
+const RC_ROTATION = [
+  { key: "func", name: "関数・解析", weekdays: [1, 4], chapters: [
+    ["rc_math1", 3], // Ⅰ 2次関数
+    ["rc_math2", 4], // Ⅱ 三角関数
+    ["rc_math2", 5], // Ⅱ 指数関数・対数関数
+    ["rc_math2", 6], // Ⅱ 微分法
+    ["rc_math2", 7], // Ⅱ 積分法
+    ["rc_math3", 3], // Ⅲ 関数
+    ["rc_math3", 4], // Ⅲ 極限
+    ["rc_math3", 5], // Ⅲ 微分法
+    ["rc_math3", 6], // Ⅲ 微分法の応用
+    ["rc_math3", 7], // Ⅲ 積分法
+    ["rc_math3", 8], // Ⅲ 積分法の応用
+  ] },
+  { key: "geo", name: "図形", weekdays: [2, 5], chapters: [
+    ["rc_math1", 4], // Ⅰ 図形と計量
+    ["rc_mathA", 3], // A 図形の性質
+    ["rc_math2", 3], // Ⅱ 図形と方程式
+    ["rc_mathB", 1], // B 平面上のベクトル
+    ["rc_mathB", 2], // B 空間のベクトル
+    ["rc_math3", 1], // Ⅲ 複素数平面
+    ["rc_math3", 2], // Ⅲ 式と曲線
+  ] },
+  { key: "disc", name: "離散・代数", weekdays: [3, 6], chapters: [
+    ["rc_math1", 1], // Ⅰ 数と式
+    ["rc_math1", 2], // Ⅰ 集合と命題
+    ["rc_mathA", 1], // A 場合の数
+    ["rc_mathA", 2], // A 確率
+    ["rc_mathA", 4], // A 整数の性質
+    ["rc_math2", 1], // Ⅱ 式と証明
+    ["rc_math2", 2], // Ⅱ 複素数と方程式
+    ["rc_mathB", 3], // B 数列
+    ["rc_math1", 5], // Ⅰ データの分析
+  ] },
+];
+// 赤チャートの復習日: 日曜（予備日）に当たったら月曜へ送る。
+function rcReviewDate(subjectId, date) {
+  if (!isRcScheduled(subjectId) || !date) return date;
+  return parseLocalDate(date).getDay() === 0 ? addDays(date, 1) : date;
+}
+// 1日1題に入れる対象か: 例題で、まだ解いていない（マーク無し・未完了）。
+function isRcPending(td) {
+  return !!td && /^例題\d/.test(td.text || "") && !td.done && !td.understanding && td.firstTry !== true;
+}
+// 系統ごとに例題TODOを進む順に並べる。返り値 [{ sys, todos }]。
+function rcRotationOrder(subjectTodos) {
+  const byParent = new Map();
+  subjectTodos.forEach(td => {
+    if (!td.parentId || !/^例題\d/.test(td.text || "")) return;
+    if (!byParent.has(td.parentId)) byParent.set(td.parentId, []);
+    byParent.get(td.parentId).push(td);
+  });
+  const num = (td) => parseInt((td.text.match(/^例題(\d+)/) || [])[1] || "0", 10);
+  return RC_ROTATION.map(sys => ({
+    sys,
+    todos: sys.chapters.flatMap(([book, ch]) =>
+      (byParent.get(`${book}_ch${ch}`) || []).slice().sort((a, b) => num(a) - num(b))),
+  }));
+}
+// 系統ローテーションの予定を計算する（純関数）。返り値 { adds, moves, removes }。
+// ・1日1題のタスクは rcPlan: true の印を付けて作る（これだけを動かす・消す）
+// ・その系統の曜日で、今日〜 horizon 日先の日に、未着手の例題を順に1題ずつ置く
+// ・同じ系統の1日1題を既に完了した日（今日・先の日）は埋まっている扱いで飛ばす
+// 一度適用すると再実行しても変化が出ない（冪等）。
+function planRcRotation(tasks, subjectTodos, subjects, today, horizon = RC_HORIZON_DAYS) {
+  const end = addDays(today, horizon);
+  const order = rcRotationOrder(subjectTodos);
+  const sysOf = new Map();
+  order.forEach(({ sys, todos }) => todos.forEach(td => sysOf.set(td.id, sys.key)));
+  const openTask = new Map(); // todoId -> 未完了の1日1題タスク
+  const removes = [];
+  const usedBy = new Map(order.map(({ sys }) => [sys.key, new Set()]));
+  tasks.forEach(t => {
+    if (!t.rcPlan) return;
+    if (t.done) {
+      const k = sysOf.get(t.subjectTodoId);
+      if (k && t.date >= today) usedBy.get(k).add(t.date);
+      return;
+    }
+    if (openTask.has(t.subjectTodoId)) removes.push(t.id); // 同じ例題の重複は1つに
+    else openTask.set(t.subjectTodoId, t);
+  });
+  const adds = [], moves = [];
+  const assigned = new Set();
+  order.forEach(({ sys, todos }) => {
+    const wd = new Set(sys.weekdays);
+    const used = usedBy.get(sys.key);
+    let d = today;
+    const nextSlot = () => {
+      while (d <= end && (!wd.has(parseLocalDate(d).getDay()) || used.has(d))) d = addDays(d, 1);
+      if (d > end) return null;
+      const slot = d; d = addDays(d, 1); return slot;
+    };
+    for (const td of todos) {
+      if (!isRcPending(td)) continue;
+      const slot = nextSlot();
+      if (!slot) break;
+      assigned.add(td.id);
+      const ex = openTask.get(td.id);
+      if (ex) { if (ex.date !== slot) moves.push({ taskId: ex.id, newDate: slot }); continue; }
+      adds.push({
+        id: genId(), date: slot, title: buildTaskTitle(td, subjects),
+        hour: null, duration: td.minutes ? Math.max(1/60, td.minutes / 60) : 1, priority: "medium",
+        actual: null, done: false, note: "", goalId: null,
+        kind: "study", subjectId: td.subjectId, subjectTodoId: td.id,
+        originalDate: slot, rcPlan: true,
+      });
+    }
+  });
+  // 範囲外に押し出された・解き終えた例題の未完了タスクは外す（範囲に入れば作り直す）
+  openTask.forEach((t, todoId) => { if (!assigned.has(todoId)) removes.push(t.id); });
+  return { adds, moves, removes };
+}
+// 記録のみモードから系統ローテーションへの切り替え（一度だけ）。
+// ・1発で解けた（firstTry: true）問題 → ◎（復習不要）で完了のまま
+// ・1発では解けなかった（firstTry: false）問題 → 未着手に戻して1日1題の予定に入れる（firstTry の記録は残す）
+function migrateRcToRotation(subjectTodos) {
+  let changed = 0;
+  const out = subjectTodos.map(td => {
+    if (!isRcScheduled(td.subjectId) || td.firstTry === undefined) return td;
+    if (td.firstTry === true) {
+      if (td.understanding === 4 && td.done) return td;
+      changed++;
+      return { ...td, understanding: 4, reviewDue: null, status: "done", done: true };
+    }
+    if (!td.done && !td.understanding) return td;
+    changed++;
+    return { ...td, understanding: null, reviewDue: null, status: "unwatched", done: false };
+  });
+  return { subjectTodos: out, changed };
 }
 
 /* ── 会計士（CPA勉強）講義の受講計画 ──
@@ -2717,7 +2863,9 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       const td = subjectTodos.find(x => x.id === task.subjectTodoId);
       if (td) cur = td.understanding || 0;
     }
-    const r = srApply(cur, solved, base);
+    const r0 = srApply(cur, solved, base);
+    // 赤チャートは日曜が予備日なので、日曜に当たる復習は月曜へ送る
+    const r = { ...r0, reviewDue: rcReviewDate(task.subjectId, r0.reviewDue) };
     const done = r.understanding >= 4;
     // かかった時間（分）。空欄・不正値は記録しない（null）。
     const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
@@ -2759,7 +2907,8 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
     // 練習は例題と1対1で、例題とは別TODOとして独自の間隔反復ラダーを持つ。
     if (done && task.subjectTodoId) {
       const ex = subjectTodos.find(x => x.id === task.subjectTodoId);
-      const isRedChartExample = ex && (ex.subjectId || "").startsWith("rc_")
+      // 系統ローテーションの1日1題にしてからは練習を作らない（RC_PRACTICE）
+      const isRedChartExample = RC_PRACTICE && ex && (ex.subjectId || "").startsWith("rc_")
         && /^例題/.test(ex.text || "") && !ex.practiceTodoId;
       if (isRedChartExample) {
         const practiceId = genId();
@@ -5291,7 +5440,9 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       });
       return;
     }
-    const r = srApply(todo.understanding, solved, base);
+    const r0 = srApply(todo.understanding, solved, base);
+    // 赤チャートは日曜が予備日なので、日曜に当たる復習は月曜へ送る
+    const r = { ...r0, reviewDue: rcReviewDate(todo.subjectId, r0.reviewDue) };
     const done = r.understanding >= 4; // ◎=復習不要=完了扱い
     setSubjectTodos(ts => ts.map(t => t.id === id
       ? { ...t, understanding: r.understanding, reviewDue: r.reviewDue, status: done ? "done" : "reviewing", done }
@@ -6021,7 +6172,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   ☑ 複数選択
                 </button>
                 <div style={{ flex: 1 }} />
-                {!isRcRecordOnly(activeSubject) && (
+                {!isRcScheduled(activeSubject) && (
                 <button onClick={() => openAutoDist(parentTodos.map(t => t.id))}
                   style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px", whiteSpace: "nowrap" }) }}>
                   ⚡ 自動分配
@@ -6044,13 +6195,13 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 </div>
                 {selectedTodos.length > 0 && (
                   <>
-                    {!isRcRecordOnly(activeSubject) && (
+                    {!isRcScheduled(activeSubject) && (
                     <button onClick={() => openAutoDist(selectedTodos)}
                       style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px" }) }}>
                       ⚡ 自動分配
                     </button>
                     )}
-                    {!autoMode && !isRcRecordOnly(activeSubject) && (
+                    {!autoMode && !isRcScheduled(activeSubject) && (
                       <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
                         style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
                         📅 月に追加
@@ -6508,7 +6659,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       }}>{fmtH(displayMinutes)}{hasChildren && <span style={{ opacity: 0.6 }}> 📝{doneChildren}/{children.length}</span>}</span>
                     ) : null}
                     <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
-                      {!autoMode && !isRcRecordOnly(t.subjectId) && (
+                      {!autoMode && !isRcScheduled(t.subjectId) && (
                         <div style={{ display: "flex", gap: 3 }}>
                           <button onClick={() => setMonthPickerTodo(t)} title="月を選んで追加"
                             style={{
@@ -8758,7 +8909,7 @@ function SettingsModal({ settings, setSettings, onClose, onReset, syncEmail, set
             <span style={{ flex: 1 }}>
               <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>1日1題にする</span>
               <span style={{ display: "block", fontSize: 10, color: C.textDim, marginTop: 1 }}>
-                教材ごとに1日1題（数学Ⅰで1題、Aで1題…）。復習や練習がある日には同じ教材の例題を置かず、次の空き日へずらします。自動分配も1日1問ずつ置きます。
+                系統ごとに曜日を分けて1日1題（月木=関数・解析、火金=図形、水土=離散・代数、日曜は予備日）。まだ解いていない例題を8週間先まで自動で入れ、解けなかった問題は復習（翌日→3日後→1週間後）が別に入ります。
               </span>
             </span>
           </button>
@@ -9430,22 +9581,41 @@ function App() {
     });
   }, [tasks, subjectTodos, syncEmail, syncStatus]);
 
-  // 1日1題（赤チャート・教材ごと）: 復習などで埋まった日の例題・練習を次の空き日へずらす。
-  // タスクが変わるたびに走るが、調整済みなら移動が出ないので setTasks は呼ばれない。
+  // 赤チャート: 記録のみモードから系統ローテーションへ切り替える（一度だけ。TODOに rcRotated の印を付ける）。
+  // 1発で解けた問題は◎で完了のまま、1発では解けなかった問題は未着手に戻して1日1題の予定に入れる。
+  const rcRotationMigRef = useRef(false);
+  useEffect(() => {
+    if (rcRotationMigRef.current) return;
+    if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
+    rcRotationMigRef.current = true;
+    setSubjectTodos(prev => {
+      const target = prev.filter(td => isRcScheduled(td.subjectId) && td.firstTry !== undefined && !td.rcRotated);
+      if (target.length === 0) return prev;
+      const ids = new Set(target.map(td => td.id));
+      const r = migrateRcToRotation(target);
+      const conv = new Map(r.subjectTodos.map(td => [td.id, { ...td, rcRotated: true }]));
+      return prev.map(td => ids.has(td.id) ? conv.get(td.id) : td);
+    });
+  }, [syncEmail, syncStatus]);
+
+  // 1日1題（赤チャート・系統ローテーション）: 月木=関数・解析 / 火金=図形 / 水土=離散・代数 で、
+  // 今日から8週間先まで未着手の例題を1日1題ずつ予定に入れ、解いた・過ぎた分を詰め直す。
+  // データが変わるたびに走るが、調整済みなら変化が出ないので setTasks は呼ばれない。
   const oneProblemPerDay = settings.oneProblemPerDay ?? true;
   useEffect(() => {
     if (!oneProblemPerDay) return;
     if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
-    const moves = planOneProblemPerDay(tasks, todayStr());
-    if (moves.length === 0) return;
+    if (!rcRotationMigRef.current) return;
+    const { adds, moves, removes } = planRcRotation(tasks, subjectTodos, subjects, todayStr());
+    if (adds.length === 0 && moves.length === 0 && removes.length === 0) return;
     const moveMap = new Map(moves.map(m => [m.taskId, m.newDate]));
-    setTasks(ts => ts.map(t => moveMap.has(t.id) ? { ...t, date: moveMap.get(t.id) } : t));
-    resyncPlanMarkers(
-      tasks.filter(t => moveMap.has(t.id) && t.subjectTodoId)
-        .map(t => ({ todoId: t.subjectTodoId, subjectId: t.subjectId, date: moveMap.get(t.id) })),
-      setMonthlyPlans, setWeeklyPlans,
-    );
-  }, [tasks, oneProblemPerDay, syncEmail, syncStatus]);
+    const rm = new Set(removes);
+    setTasks(ts => [
+      ...ts.filter(t => !rm.has(t.id))
+        .map(t => moveMap.has(t.id) ? { ...t, date: moveMap.get(t.id), originalDate: moveMap.get(t.id) } : t),
+      ...adds.filter(a => !ts.some(t => t.rcPlan && !t.done && t.subjectTodoId === a.subjectTodoId)),
+    ]);
+  }, [tasks, subjectTodos, subjects, oneProblemPerDay, syncEmail, syncStatus]);
 
   const resetAll = () => {
     const keysToRemove = [];
