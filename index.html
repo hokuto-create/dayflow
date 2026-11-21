@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261121-1';
+  const APP_VERSION = '20261121-2';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -498,8 +498,7 @@ function planOneProblemPerDay(tasks, today) {
    ・月・木: 関数・解析 / 火・金: 図形 / 水・土: 離散・代数
    ・各系統の中は chapters の順（教材の章 → 例題番号順）に進む
    ・対象は「例題」だけ（練習・演習問題・総合演習は入れない）。解いた問題（マークあり・完了）は飛ばす
-   ・解いた結果は間隔反復ラダー（✖️翌日→△3日後→○1週間後→◎）で復習が入る。復習は1日1題とは別枠で、
-     日曜に当たる復習は月曜へ送る（rcReviewDate）
+   ・解いた結果は間隔反復ラダー（✖️翌日→△3日後→○1週間後→◎）で復習が入る。復習は1日1題とは別枠
    ・予定は今日から RC_HORIZON_DAYS 日先までを常に入れておき、起動時・データ変更時に詰め直す
      （解かずに過ぎた日の問題や、一覧で解けた登録をした問題の分は、同じ系統の次の日へ順に詰める） */
 const RC_HORIZON_DAYS = 56; // 8週間先まで
@@ -538,11 +537,6 @@ const RC_ROTATION = [
     ["rc_math1", 5], // Ⅰ データの分析
   ] },
 ];
-// 赤チャートの復習日: 日曜（予備日）に当たったら月曜へ送る。
-function rcReviewDate(subjectId, date) {
-  if (!isRcScheduled(subjectId) || !date) return date;
-  return parseLocalDate(date).getDay() === 0 ? addDays(date, 1) : date;
-}
 // 1日1題に入れる対象か: 例題で、まだ解いていない（マーク無し・未完了）。
 function isRcPending(td) {
   return !!td && /^例題\d/.test(td.text || "") && !td.done && !td.understanding && td.firstTry !== true;
@@ -2863,9 +2857,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       const td = subjectTodos.find(x => x.id === task.subjectTodoId);
       if (td) cur = td.understanding || 0;
     }
-    const r0 = srApply(cur, solved, base);
-    // 赤チャートは日曜が予備日なので、日曜に当たる復習は月曜へ送る
-    const r = { ...r0, reviewDue: rcReviewDate(task.subjectId, r0.reviewDue) };
+    const r = srApply(cur, solved, base);
     const done = r.understanding >= 4;
     // かかった時間（分）。空欄・不正値は記録しない（null）。
     const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
@@ -5440,9 +5432,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
       });
       return;
     }
-    const r0 = srApply(todo.understanding, solved, base);
-    // 赤チャートは日曜が予備日なので、日曜に当たる復習は月曜へ送る
-    const r = { ...r0, reviewDue: rcReviewDate(todo.subjectId, r0.reviewDue) };
+    const r = srApply(todo.understanding, solved, base);
     const done = r.understanding >= 4; // ◎=復習不要=完了扱い
     setSubjectTodos(ts => ts.map(t => t.id === id
       ? { ...t, understanding: r.understanding, reviewDue: r.reviewDue, status: done ? "done" : "reviewing", done }
