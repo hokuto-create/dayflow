@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261122-1';
+  const APP_VERSION = '20261122-2';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -592,8 +592,13 @@ function planRcRotation(tasks, subjectTodos, subjects, today, horizon = RC_HORIZ
   const openTask = new Map(); // todoId -> 未完了の1日1題タスク
   const removes = [];
   const usedBy = new Map(order.map(({ sys }) => [sys.key, new Set()]));
+  const extraFixed = new Set(); // 「もう1問」で今日に足した例題（その日のまま動かさない）
   tasks.forEach(t => {
     if (!t.rcPlan) return;
+    if (!t.done && t.rcExtra && t.date >= today) {
+      if (extraFixed.has(t.subjectTodoId)) removes.push(t.id); else extraFixed.add(t.subjectTodoId);
+      return;
+    }
     if (t.done) {
       const k = sysOf.get(t.subjectTodoId);
       if (k && t.date >= today) usedBy.get(k).add(t.date);
@@ -602,6 +607,8 @@ function planRcRotation(tasks, subjectTodos, subjects, today, horizon = RC_HORIZ
     if (openTask.has(t.subjectTodoId)) removes.push(t.id); // 同じ例題の重複は1つに
     else openTask.set(t.subjectTodoId, t);
   });
+  // 「もう1問」の例題と同じ例題の通常の予定は外す（二重に入れない）
+  openTask.forEach((t, todoId) => { if (extraFixed.has(todoId)) { removes.push(t.id); openTask.delete(todoId); } });
   const adds = [], moves = [];
   const assigned = new Set();
   order.forEach(({ sys, todos }) => {
@@ -614,7 +621,7 @@ function planRcRotation(tasks, subjectTodos, subjects, today, horizon = RC_HORIZ
       const slot = d; d = addDays(d, 1); return slot;
     };
     for (const td of todos) {
-      if (!isRcPending(td)) continue;
+      if (!isRcPending(td) || extraFixed.has(td.id)) continue;
       const slot = nextSlot();
       if (!slot) break;
       assigned.add(td.id);
@@ -633,6 +640,41 @@ function planRcRotation(tasks, subjectTodos, subjects, today, horizon = RC_HORIZ
   openTask.forEach((t, todoId) => { if (!assigned.has(todoId)) removes.push(t.id); });
   return { adds, moves, removes };
 }
+/* ── 赤チャート: 簡単だった日の「もう1問」 ──
+   1日1題の例題が明らかに簡単だったとき、同じ系統の次の例題をその日にもう1題入れる。
+   ・足した例題のタスクには rcPlan と rcExtra: true の印を付ける。planRcRotation はその日のまま動かさず、
+     元々入っていた先の日の予定は外して、後ろの例題を1つずつ前へ詰める
+   ・その日に解かずに過ぎたら rcExtra を外し、ふつうの1日1題として次の空き日へ回る */
+// doneTodoId（いま解いた例題）の系統で、次に解く例題TODOを返す。無ければ null。
+function rcNextExtraTodo(tasks, subjectTodos, doneTodoId, today) {
+  const order = rcRotationOrder(subjectTodos);
+  const hit = order.find(({ todos }) => todos.some(td => td.id === doneTodoId));
+  if (!hit) return null;
+  // 今日すでに未完了の予定が入っている例題（別の「もう1問」など）は飛ばす
+  const todayOpen = new Set(tasks.filter(t => t.rcPlan && !t.done && t.date === today).map(t => t.subjectTodoId));
+  return hit.todos.find(td => td.id !== doneTodoId && isRcPending(td) && !todayOpen.has(td.id)) || null;
+}
+// 「もう1問」のタスクを作る（純関数）。
+function rcExtraTask(td, subjects, today) {
+  return {
+    id: genId(), date: today, title: buildTaskTitle(td, subjects),
+    hour: null, duration: td.minutes ? Math.max(1/60, td.minutes / 60) : 1, priority: "medium",
+    actual: null, done: false, note: "", goalId: null,
+    kind: "study", subjectId: td.subjectId, subjectTodoId: td.id,
+    originalDate: today, rcPlan: true, rcExtra: true,
+  };
+}
+// 今日解き終えた1日1題で、「もう1問」を出せるか（同じ系統の未完了の予定が今日に無い）。
+function canAddRcExtra(task, tasks, subjectTodos, today) {
+  if (!task || !task.rcPlan || task.isReview || task.date !== today) return null;
+  const order = rcRotationOrder(subjectTodos);
+  const hit = order.find(({ todos }) => todos.some(td => td.id === task.subjectTodoId));
+  if (!hit) return null;
+  const ids = new Set(hit.todos.map(td => td.id));
+  if (tasks.some(t => t.rcPlan && !t.done && t.date === today && ids.has(t.subjectTodoId))) return null;
+  return rcNextExtraTodo(tasks, subjectTodos, task.subjectTodoId, today);
+}
+
 /* ── 赤チャート: 練習の未消化分を日曜に1題ずつ ──
    練習は例題が◎になった2週間後に入る（rcPracticeFor）が、それより前に◎になっていた例題
    （記録のみモードで1発で解けた問題など）には練習が付いていない。その分は日曜（予備日）に1日1題ずつ入れる。
@@ -2935,8 +2977,22 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
 
   // Days until next review based on understanding (1-4)
   // 間隔反復ラダー: 解けた(solved=true)/解けなかった(false)でマークを1段進める。
-  const completeWithUnderstanding = (task, solved, minutes) => {
+  // 赤チャートの1日1題: 同じ系統の次の例題を今日にもう1題入れる（簡単だったとき）。
+  // 先の日に入っていたその例題の予定は外し、後ろは planRcRotation が詰め直す。
+  const addRcExtra = (task, excludeTodoId) => {
+    const today = todayStr();
+    const td = excludeTodoId
+      ? rcNextExtraTodo(tasks, subjectTodos, excludeTodoId, today)
+      : canAddRcExtra(task, tasks, subjectTodos, today);
+    if (!td) return null;
+    const nt = rcExtraTask(td, subjects, today);
+    setTasks(ts => [...ts.filter(x => !(x.rcPlan && !x.done && x.subjectTodoId === td.id)), nt]);
+    setFocusId(nt.id);
+    return nt;
+  };
+  const completeWithUnderstanding = (task, solved, minutes, extra) => {
     const base = todayStr(); // 「その段階になった日」を起点に次回復習日を決める
+    if (extra) addRcExtra(task, task.subjectTodoId);
     // 赤チャート（記録のみモード）: 1発で解けたかだけ記録し、復習・練習は作らない。
     if (isRcRecordOnly(task.subjectId)) {
       const spent = (minutes != null && minutes !== "" && Number(minutes) > 0) ? Number(minutes) : null;
@@ -3856,6 +3912,10 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   </div>
                   <LectureRangeLine task={t} subjectTodos={subjectTodos} compact={!wideLayout} />
                 </div>
+                {t.done && canAddRcExtra(t, tasks, subjectTodos, todayStr()) && (
+                  <button onClick={() => addRcExtra(t)} title="簡単だったので、同じ系統の次の例題を今日にもう1題"
+                    style={{ ...btn(false, C.blue, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>＋もう1問</button>
+                )}
                 <button onClick={() => setScheduleModal(t)}
                   style={{ ...btn(false, C.accent, { fontSize: 10, padding: "3px 8px" }) }}>時間設定</button>
                 <button onClick={() => askDeleteTask(t.id)}
@@ -3979,6 +4039,10 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   style={{ ...btn(t.done, C.green, { padding: "3px 7px", fontSize: 11 }) }}>
                   {t.done ? "✓" : "○"}
                 </button>
+                {t.done && canAddRcExtra(t, tasks, subjectTodos, todayStr()) && (
+                  <button onClick={() => addRcExtra(t)} title="簡単だったので、同じ系統の次の例題を今日にもう1題"
+                    style={{ ...btn(false, C.blue, { padding: "3px 7px", fontSize: 11, whiteSpace: "nowrap" }) }}>＋もう1問</button>
+                )}
                 <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, hour: null } : x))}
                   title="時間を外す" style={{ ...btn(false, C.yellow, { padding: "3px 7px", fontSize: 11 }) }}>⏱</button>
                 <button onClick={() => startEdit(t)} style={{ ...btn(false, C.blue, { padding: "3px 8px", fontSize: 11, minWidth: stack ? 0 : 28 }) }}>{stack ? "✎" : "編集"}</button>
@@ -4218,11 +4282,16 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         const okNext = SR_MARK[srApply(cur, true, todayStr()).understanding];
         const ngNext = SR_MARK[srApply(cur, false, todayStr()).understanding];
         const unsureNext = SR_MARK[srApply(cur, SR_UNSURE, todayStr()).understanding];
+        // 赤チャートの1日1題（今日の分）なら「簡単だった（もう1問）」を出す
+        const extraTd = t.rcPlan && !t.isReview && t.date === todayStr() && !rcOnly
+          ? rcNextExtraTodo(tasks, subjectTodos, t.subjectTodoId, todayStr()) : null;
         const CHOICES = rcOnly ? [
           { solved: true,  title: "1発で解けた",   sub: "記録のみ", color: C.green },
           { solved: false, title: "解けなかった", sub: "記録のみ", color: C.red },
         ] : [
           { solved: true,  title: "解けた",       sub: `→ ${okNext.mark}（${okNext.label}）`, color: C.green },
+          ...(extraTd ? [{ solved: true, extra: true, title: "簡単だった（今日もう1問）",
+            sub: `→ ${okNext.mark}（${okNext.label}）＋ ${abbrevTitle(extraTd.text)} を今日に追加`, color: C.blue }] : []),
           ...(canMarkUnsure(td, cur) ? [{ solved: SR_UNSURE, title: "不安", sub: `→ ${unsureNext.mark}（${unsureNext.label}）`, color: C.yellow }] : []),
           { solved: false, title: "解けなかった", sub: `→ ${ngNext.mark}（${ngNext.label}）`, color: C.red },
         ];
@@ -4271,7 +4340,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {CHOICES.map(ch => (
-                  <button key={ch.title} onClick={() => completeWithUnderstanding(t, ch.solved, solveMinutes)}
+                  <button key={ch.title} onClick={() => completeWithUnderstanding(t, ch.solved, solveMinutes, ch.extra)}
                     style={{
                       display: "flex", alignItems: "center", gap: 12,
                       padding: "12px 14px", borderRadius: 8,
@@ -4282,7 +4351,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                       width: 40, height: 40, borderRadius: "50%", background: ch.color,
                       color: "#fff", fontWeight: 700, fontSize: 18,
                       display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                    }}>{ch.solved === SR_UNSURE ? "△" : ch.solved ? "○" : "✕"}</div>
+                    }}>{ch.extra ? "＋" : ch.solved === SR_UNSURE ? "△" : ch.solved ? "○" : "✕"}</div>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{ch.title}</div>
                       <div style={{ fontSize: 11, color: C.textMid }}>{ch.sub}</div>
@@ -9693,7 +9762,8 @@ function App() {
     const rm = new Set(removes);
     setTasks(ts => [
       ...ts.filter(t => !rm.has(t.id))
-        .map(t => moveMap.has(t.id) ? { ...t, date: moveMap.get(t.id), originalDate: moveMap.get(t.id) } : t),
+        // 解かずに過ぎた「もう1問」は印を外して、ふつうの1日1題として回す
+        .map(t => moveMap.has(t.id) ? { ...t, date: moveMap.get(t.id), originalDate: moveMap.get(t.id), rcExtra: false } : t),
       ...adds.filter(a => !ts.some(t => t.rcPlan && !t.done && t.subjectTodoId === a.subjectTodoId)),
     ]);
   }, [tasks, subjectTodos, subjects, oneProblemPerDay, syncEmail, syncStatus]);
