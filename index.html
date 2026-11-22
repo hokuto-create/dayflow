@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261121-4';
+  const APP_VERSION = '20261122-1';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -3117,6 +3117,12 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
   const endH = settings?.dayEndHour ?? 26;
   const hours = Array.from({ length: endH - startH }, (_, i) => i + startH);
 
+  // 1つ表示ボタン。勉強開始の行（スワイプせずに見える位置）に置き、その行が無い日だけ日付ジャンプの列に置く
+  const focusBtn = (
+    <button onClick={() => setFocusMode(true)} title="この日のタスクを1つずつ大きく表示する"
+      style={{ ...btn(false, C.accent, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap", color: C.accent, borderColor: C.accentSoft, flexShrink: 0 }) }}>◱ 1つ表示</button>
+  );
+
   return (
     <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-start", gap: 16, padding: wideLayout ? "0 16px" : 0 }}>
     <div style={{ padding: wideLayout ? "16px 0" : 16, maxWidth: 600, margin: wideLayout ? 0 : "0 auto", flex: 1, minWidth: 0 }}>
@@ -3148,6 +3154,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
       </div>
 
       {/* Quick jump bar */}
+
       <div style={{ display: "flex", gap: 5, marginBottom: 12, overflowX: "auto" }}>
         <button onClick={() => setSelectedDate(todayStr())} style={{ ...btn(selectedDate === todayStr(), C.accent, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>今日</button>
         <button onClick={() => setSelectedDate(addDays(todayStr(), 1))} style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>明日</button>
@@ -3155,9 +3162,11 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         <button onClick={() => setSelectedDate(addDays(todayStr(), 7))} style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>1週間後</button>
         <button onClick={() => setSelectedDate(addDays(todayStr(), 30))} style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>1ヶ月後</button>
         <button onClick={() => setSelectedDate(addDays(todayStr(), 90))} style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }) }}>3ヶ月後</button>
-        <div style={{ flex: 1 }} />
-        <button onClick={() => setFocusMode(true)} title="この日のタスクを1つずつ大きく表示する"
-          style={{ ...btn(false, C.accent, { fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap", color: C.accent, borderColor: C.accentSoft }) }}>◱ 1つ表示</button>
+        {/* 勉強開始の行が出ない日（今日以外で開始記録なし）だけ、ここに 1つ表示 を出す。出る日は勉強開始の行に置く（スワイプせずに押せるように） */}
+        {!(selectedDate === todayStr() || (reviews && reviews[selectedDate] || {}).startedAt) && <>
+          <div style={{ flex: 1 }} />
+          {focusBtn}
+        </>}
       </div>
 
       {/* 勉強開始: 押した時刻をその日の振り返り記録（reviews[日付].startedAt）に残し、振り返り画面に「開始 → 最終完了」で出す。
@@ -3176,11 +3185,15 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                 onChange={e => e.target.value && setStartedAt(new Date(`${selectedDate}T${e.target.value}:00`).toISOString())}
                 style={{ fontSize: 13, padding: "3px 6px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.surface, color: C.text }} />
               <div style={{ flex: 1 }} />
+              {focusBtn}
               <button onClick={() => { if (confirm("開始時刻の記録を取り消しますか？")) setStartedAt(null); }}
                 style={{ ...btn(false, C.textMid, { fontSize: 11, padding: "4px 10px" }) }}>取り消す</button>
             </> : (
-              <button onClick={() => setStartedAt(new Date().toISOString())}
-                style={{ ...btn(true, C.green, { flex: 1, fontSize: 14, padding: "10px" }) }}>▶ 勉強開始</button>
+              <>
+                <button onClick={() => setStartedAt(new Date().toISOString())}
+                  style={{ ...btn(true, C.green, { flex: 1, fontSize: 14, padding: "10px" }) }}>▶ 勉強開始</button>
+                {focusBtn}
+              </>
             )}
           </div>
         );
