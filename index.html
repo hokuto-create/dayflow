@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261122-2';
+  const APP_VERSION = '20261122-3';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -644,7 +644,11 @@ function planRcRotation(tasks, subjectTodos, subjects, today, horizon = RC_HORIZ
    1日1題の例題が明らかに簡単だったとき、同じ系統の次の例題をその日にもう1題入れる。
    ・足した例題のタスクには rcPlan と rcExtra: true の印を付ける。planRcRotation はその日のまま動かさず、
      元々入っていた先の日の予定は外して、後ろの例題を1つずつ前へ詰める
-   ・その日に解かずに過ぎたら rcExtra を外し、ふつうの1日1題として次の空き日へ回る */
+   ・その日に解かずに過ぎたら rcExtra を外し、ふつうの1日1題として次の空き日へ回る
+   練習（2週間後の練習・日曜の練習）でも同じように、次の練習をその日にもう1題入れられる（復習には出さない）。
+   ・次の練習 = 先の日に入っている練習のうち一番早いもの。無ければ日曜の練習の順番待ちの先頭
+   ・足した練習のタスクは isPractice と rcExtra: true（日曜の割り当てからは外れ、空いた日曜は次の練習で埋まる）
+   ・その日に解かずに過ぎたら外して、日曜の練習の順番待ちに戻す（planRcSundayPractice） */
 // doneTodoId（いま解いた例題）の系統で、次に解く例題TODOを返す。無ければ null。
 function rcNextExtraTodo(tasks, subjectTodos, doneTodoId, today) {
   const order = rcRotationOrder(subjectTodos);
@@ -654,19 +658,43 @@ function rcNextExtraTodo(tasks, subjectTodos, doneTodoId, today) {
   const todayOpen = new Set(tasks.filter(t => t.rcPlan && !t.done && t.date === today).map(t => t.subjectTodoId));
   return hit.todos.find(td => td.id !== doneTodoId && isRcPending(td) && !todayOpen.has(td.id)) || null;
 }
-// 「もう1問」のタスクを作る（純関数）。
+// 練習の「もう1問」: doneTodoId（いま解いた練習）の次に解く練習TODOを返す。無ければ null。
+function rcNextExtraPractice(tasks, subjectTodos, doneTodoId, today) {
+  const isOpenPr = (t) => isRedChartTask(t) && t.isPractice && !t.isReview && !t.done;
+  const next = tasks
+    .filter(t => isOpenPr(t) && t.date > today && t.subjectTodoId !== doneTodoId)
+    .sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : 0)[0];
+  if (next) return subjectTodos.find(td => td.id === next.subjectTodoId) || null;
+  // 先の予定が無ければ、日曜の練習の順番待ち（予定の付いていない未着手の練習）の先頭
+  const hasOpen = new Set(tasks.filter(t => !t.done && t.subjectTodoId).map(t => t.subjectTodoId));
+  return rcPracticeQueue(subjectTodos).find(pr => pr.id !== doneTodoId && !pr.done && !pr.understanding && !hasOpen.has(pr.id)) || null;
+}
+// いま解いている（解いた）タスクの次の「もう1問」を返す（例題なら同じ系統の次の例題、練習なら次の練習）。
+function rcNextExtraFor(task, tasks, subjectTodos, today) {
+  if (!task || task.isReview || !isRedChartTask(task)) return null;
+  if (task.isPractice) return rcNextExtraPractice(tasks, subjectTodos, task.subjectTodoId, today);
+  if (task.rcPlan) return rcNextExtraTodo(tasks, subjectTodos, task.subjectTodoId, today);
+  return null;
+}
+// 「もう1問」のタスクを作る（純関数）。練習TODOなら練習のタスクにする。
 function rcExtraTask(td, subjects, today) {
   return {
     id: genId(), date: today, title: buildTaskTitle(td, subjects),
     hour: null, duration: td.minutes ? Math.max(1/60, td.minutes / 60) : 1, priority: "medium",
     actual: null, done: false, note: "", goalId: null,
     kind: "study", subjectId: td.subjectId, subjectTodoId: td.id,
-    originalDate: today, rcPlan: true, rcExtra: true,
+    originalDate: today, rcExtra: true,
+    ...(td.practiceOf ? { isPractice: true } : { rcPlan: true }),
   };
 }
-// 今日解き終えた1日1題で、「もう1問」を出せるか（同じ系統の未完了の予定が今日に無い）。
+// 今日解き終えた1日1題・練習で、「もう1問」を出せるか（同じ種類の未完了の予定が今日に無い）。出せるなら次のTODO。
 function canAddRcExtra(task, tasks, subjectTodos, today) {
-  if (!task || !task.rcPlan || task.isReview || task.date !== today) return null;
+  if (!task || task.isReview || task.date !== today || !isRedChartTask(task)) return null;
+  if (task.isPractice) {
+    if (tasks.some(t => isRedChartTask(t) && t.isPractice && !t.isReview && !t.done && t.date === today)) return null;
+    return rcNextExtraPractice(tasks, subjectTodos, task.subjectTodoId, today);
+  }
+  if (!task.rcPlan) return null;
   const order = rcRotationOrder(subjectTodos);
   const hit = order.find(({ todos }) => todos.some(td => td.id === task.subjectTodoId));
   if (!hit) return null;
@@ -703,16 +731,20 @@ function addRcBacklogPractices(subjectTodos) {
     added: add.length,
   };
 }
-// 日曜の練習の割り当て（純関数）。返り値 { adds, moves, removes }。冪等。
-function planRcSundayPractice(tasks, subjectTodos, subjects, today, horizon = RC_HORIZON_DAYS) {
-  const end = addDays(today, horizon);
-  // 例題の並び（系統ごとの順番）から、練習の並びを系統の持ち回りで作る
+// 練習TODOの並び（純関数）: 例題の並び（系統ごとの順番）から、系統の持ち回りで作る。
+function rcPracticeQueue(subjectTodos) {
   const order = rcRotationOrder(subjectTodos);
   const practiceByEx = new Map();
   subjectTodos.forEach(td => { if (td.practiceOf && isRcScheduled(td.subjectId)) practiceByEx.set(td.practiceOf, td); });
   const queues = order.map(({ todos }) => todos.map(ex => practiceByEx.get(ex.id)).filter(Boolean));
   const ordered = [];
   for (let i = 0; queues.some(q => i < q.length); i++) queues.forEach(q => { if (i < q.length) ordered.push(q[i]); });
+  return ordered;
+}
+// 日曜の練習の割り当て（純関数）。返り値 { adds, moves, removes }。冪等。
+function planRcSundayPractice(tasks, subjectTodos, subjects, today, horizon = RC_HORIZON_DAYS) {
+  const end = addDays(today, horizon);
+  const ordered = rcPracticeQueue(subjectTodos);
   // 日曜以外の練習予定（2週間後の練習・復習など）がある練習は対象外
   const otherTask = new Set();
   const openSun = new Map();
@@ -720,6 +752,8 @@ function planRcSundayPractice(tasks, subjectTodos, subjects, today, horizon = RC
   const removes = [];
   tasks.forEach(t => {
     if (!t.subjectTodoId) return;
+    // 解かずに過ぎた練習の「もう1問」は外して、順番待ちに戻す
+    if (t.rcExtra && t.isPractice && !t.done && t.date < today) { removes.push(t.id); return; }
     if (t.rcSunday) {
       if (t.done) { if (t.date >= today) used.add(t.date); return; }
       if (openSun.has(t.subjectTodoId)) removes.push(t.id); else openSun.set(t.subjectTodoId, t);
@@ -2977,16 +3011,17 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
 
   // Days until next review based on understanding (1-4)
   // 間隔反復ラダー: 解けた(solved=true)/解けなかった(false)でマークを1段進める。
-  // 赤チャートの1日1題: 同じ系統の次の例題を今日にもう1題入れる（簡単だったとき）。
-  // 先の日に入っていたその例題の予定は外し、後ろは planRcRotation が詰め直す。
+  // 赤チャートの1日1題・練習: 次の問題を今日にもう1題入れる（簡単だったとき）。
+  // 例題は同じ系統の次の例題、練習は次の練習。先の日に入っていた予定は外し、後ろは自動で詰め直す。
   const addRcExtra = (task, excludeTodoId) => {
     const today = todayStr();
     const td = excludeTodoId
-      ? rcNextExtraTodo(tasks, subjectTodos, excludeTodoId, today)
+      ? rcNextExtraFor(task, tasks, subjectTodos, today)
       : canAddRcExtra(task, tasks, subjectTodos, today);
     if (!td) return null;
     const nt = rcExtraTask(td, subjects, today);
-    setTasks(ts => [...ts.filter(x => !(x.rcPlan && !x.done && x.subjectTodoId === td.id)), nt]);
+    // 先の日に入っていたその問題の予定は外す（復習は残す）
+    setTasks(ts => [...ts.filter(x => !(x.subjectTodoId === td.id && !x.done && !x.isReview)), nt]);
     setFocusId(nt.id);
     return nt;
   };
@@ -3913,7 +3948,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   <LectureRangeLine task={t} subjectTodos={subjectTodos} compact={!wideLayout} />
                 </div>
                 {t.done && canAddRcExtra(t, tasks, subjectTodos, todayStr()) && (
-                  <button onClick={() => addRcExtra(t)} title="簡単だったので、同じ系統の次の例題を今日にもう1題"
+                  <button onClick={() => addRcExtra(t)} title="簡単だったので、次の問題を今日にもう1題"
                     style={{ ...btn(false, C.blue, { fontSize: 10, padding: "3px 8px", whiteSpace: "nowrap" }) }}>＋もう1問</button>
                 )}
                 <button onClick={() => setScheduleModal(t)}
@@ -4040,7 +4075,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
                   {t.done ? "✓" : "○"}
                 </button>
                 {t.done && canAddRcExtra(t, tasks, subjectTodos, todayStr()) && (
-                  <button onClick={() => addRcExtra(t)} title="簡単だったので、同じ系統の次の例題を今日にもう1題"
+                  <button onClick={() => addRcExtra(t)} title="簡単だったので、次の問題を今日にもう1題"
                     style={{ ...btn(false, C.blue, { padding: "3px 7px", fontSize: 11, whiteSpace: "nowrap" }) }}>＋もう1問</button>
                 )}
                 <button onClick={() => setTasks(ts => ts.map(x => x.id === t.id ? { ...x, hour: null } : x))}
@@ -4282,9 +4317,8 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
         const okNext = SR_MARK[srApply(cur, true, todayStr()).understanding];
         const ngNext = SR_MARK[srApply(cur, false, todayStr()).understanding];
         const unsureNext = SR_MARK[srApply(cur, SR_UNSURE, todayStr()).understanding];
-        // 赤チャートの1日1題（今日の分）なら「簡単だった（もう1問）」を出す
-        const extraTd = t.rcPlan && !t.isReview && t.date === todayStr() && !rcOnly
-          ? rcNextExtraTodo(tasks, subjectTodos, t.subjectTodoId, todayStr()) : null;
+        // 赤チャートの1日1題・練習（今日の分）なら「簡単だった（もう1問）」を出す（復習には出さない）
+        const extraTd = t.date === todayStr() && !rcOnly ? rcNextExtraFor(t, tasks, subjectTodos, todayStr()) : null;
         const CHOICES = rcOnly ? [
           { solved: true,  title: "1発で解けた",   sub: "記録のみ", color: C.green },
           { solved: false, title: "解けなかった", sub: "記録のみ", color: C.red },
