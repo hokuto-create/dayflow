@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261123-1';
+  const APP_VERSION = '20261123-2';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -2775,6 +2775,64 @@ const HIGH_PHYSICS_TODOS = buildHighPhysicsTodos(HIGH_PHYSICS_BOOKS);
 // 新規インストール用シードに反映
 SAMPLE_SUBJECTS.push(...HIGH_PHYSICS_SUBJECTS);
 SAMPLE_SUBJECT_TODOS.push(...HIGH_PHYSICS_TODOS);
+
+/* ── ハイレベル物理: 1日1題 ──
+   2026-11-24 から毎日1題ずつ、決まった順番で予定に入れる（曜日・系統の区別なし、日曜も入れる）。
+   ・順番: 例題（力学 → 熱力学・波動 → 電磁気学 → 原子・原子核）→ 演習問題（同じ順）
+   ・対象はまだ解いていない問題（未完了・マーク無し）。解いた問題は飛ばす
+   ・解いた結果の復習は間隔反復ラダーで別枠に入る（1日1題とは別）
+   ・予定は今日から HP_HORIZON_DAYS 日先までを常に入れておき、起動時・データ変更時に詰め直す
+     （解かずに過ぎた日の問題や、一覧で解けた登録をした問題の分は、次の日へ順に詰める）
+   ・1日1題のタスクには hpPlan: true の印を付ける（これだけを動かす・消す） */
+const HP_START_DATE = "2026-11-24";
+const HP_HORIZON_DAYS = 56; // 8週間先まで
+const isHpScheduled = (subjectId) => !!subjectId && String(subjectId).startsWith("hp_");
+// 進む順の「subjectId|text」キー（例題を全教材 → 演習問題を全教材）
+const HP_ORDER_KEYS = [
+  ...HIGH_PHYSICS_BOOKS.flatMap(b => b.examples.map(no => `${b.id}|例題${no}`)),
+  ...HIGH_PHYSICS_BOOKS.flatMap(b => Array.from({ length: b.exercises }, (_, i) => `${b.id}|演習問題${i + 1}`)),
+];
+function isHpPending(td) { return !!td && !td.done && !td.understanding; }
+// 1日1題の予定を計算する（純関数）。返り値 { adds, moves, removes }。一度適用すると再実行しても変化が出ない（冪等）。
+function planHpDaily(tasks, subjectTodos, subjects, today, horizon = HP_HORIZON_DAYS) {
+  const start = today > HP_START_DATE ? today : HP_START_DATE;
+  const end = addDays(today, horizon);
+  const byKey = new Map();
+  subjectTodos.forEach(td => {
+    if (td.parentId && isHpScheduled(td.subjectId)) byKey.set(`${td.subjectId}|${td.text}`, td);
+  });
+  const order = HP_ORDER_KEYS.map(k => byKey.get(k)).filter(Boolean);
+  const used = new Set();     // 1日1題を既に解いた日（今日・先の日）
+  const openTask = new Map(); // todoId -> 未完了の1日1題タスク
+  const removes = [];
+  tasks.forEach(t => {
+    if (!t.hpPlan) return;
+    if (t.done) { if (t.date >= start) used.add(t.date); return; }
+    if (openTask.has(t.subjectTodoId)) removes.push(t.id); // 同じ問題の重複は1つに
+    else openTask.set(t.subjectTodoId, t);
+  });
+  const adds = [], moves = [], assigned = new Set();
+  let d = start;
+  for (const td of order) {
+    if (!isHpPending(td)) continue;
+    while (d <= end && used.has(d)) d = addDays(d, 1);
+    if (d > end) break;
+    const slot = d; d = addDays(d, 1);
+    assigned.add(td.id);
+    const ex = openTask.get(td.id);
+    if (ex) { if (ex.date !== slot) moves.push({ taskId: ex.id, newDate: slot }); continue; }
+    adds.push({
+      id: genId(), date: slot, title: buildTaskTitle(td, subjects),
+      hour: null, duration: td.minutes ? Math.max(1/60, td.minutes / 60) : 1, priority: "medium",
+      actual: null, done: false, note: "", goalId: null,
+      kind: "study", subjectId: td.subjectId, subjectTodoId: td.id,
+      originalDate: slot, hpPlan: true,
+    });
+  }
+  // 範囲外に押し出された・解き終えた問題の未完了タスクは外す（範囲に入れば作り直す）
+  openTask.forEach((t, todoId) => { if (!assigned.has(todoId)) removes.push(t.id); });
+  return { adds, moves, removes };
+}
 
 // 既存データ（localStorage / クラウド同期済み）に赤チャートの不足分だけを追記するマイグレーション。
 // ・既存の進捗(status/done)や他データは一切変更しない（純粋に追加のみ）。
@@ -6427,7 +6485,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                   ☑ 複数選択
                 </button>
                 <div style={{ flex: 1 }} />
-                {!isRcScheduled(activeSubject) && (
+                {!isRcScheduled(activeSubject) && !isHpScheduled(activeSubject) && (
                 <button onClick={() => openAutoDist(parentTodos.map(t => t.id))}
                   style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px", whiteSpace: "nowrap" }) }}>
                   ⚡ 自動分配
@@ -6450,13 +6508,13 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                 </div>
                 {selectedTodos.length > 0 && (
                   <>
-                    {!isRcScheduled(activeSubject) && (
+                    {!isRcScheduled(activeSubject) && !isHpScheduled(activeSubject) && (
                     <button onClick={() => openAutoDist(selectedTodos)}
                       style={{ ...btn(true, activeSubjectData.color, { fontSize: 11, padding: "5px 10px" }) }}>
                       ⚡ 自動分配
                     </button>
                     )}
-                    {!autoMode && !isRcScheduled(activeSubject) && (
+                    {!autoMode && !isRcScheduled(activeSubject) && !isHpScheduled(activeSubject) && (
                       <button onClick={() => { setBulkMonthIds(selectedTodos); setBulkMonthPicker(true); }}
                         style={{ ...btn(true, C.purple, { fontSize: 11, padding: "5px 10px" }) }}>
                         📅 月に追加
@@ -6914,7 +6972,7 @@ function SubjectsView({ subjects, setSubjects, subjectTodos, setSubjectTodos, mo
                       }}>{fmtH(displayMinutes)}{hasChildren && <span style={{ opacity: 0.6 }}> 📝{doneChildren}/{children.length}</span>}</span>
                     ) : null}
                     <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
-                      {!autoMode && !isRcScheduled(t.subjectId) && (
+                      {!autoMode && !isRcScheduled(t.subjectId) && !isHpScheduled(t.subjectId) && (
                         <div style={{ display: "flex", gap: 3 }}>
                           <button onClick={() => setMonthPickerTodo(t)} title="月を選んで追加"
                             style={{
@@ -9434,6 +9492,22 @@ function App() {
     });
     setSubjectCategories(prev => (prev || []).includes("趣味勉強") ? prev : [...(prev || []), "趣味勉強"]);
   }, [syncEmail, syncStatus]);
+
+  // ハイレベル物理の1日1題: 2026-11-24 から毎日1題、例題（力学→熱力学・波動→電磁気学→原子・原子核）→演習問題の順に
+  // 今日から8週間先まで予定に入れ、解いた・過ぎた分を詰め直す。調整済みなら変化が出ないので setTasks は呼ばれない。
+  useEffect(() => {
+    if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
+    if (!hpMergedRef.current) return;
+    const { adds, moves, removes } = planHpDaily(tasks, subjectTodos, subjects, todayStr());
+    if (adds.length === 0 && moves.length === 0 && removes.length === 0) return;
+    const moveMap = new Map(moves.map(m => [m.taskId, m.newDate]));
+    const rm = new Set(removes);
+    setTasks(ts => [
+      ...ts.filter(t => !rm.has(t.id))
+        .map(t => moveMap.has(t.id) ? { ...t, date: moveMap.get(t.id), originalDate: moveMap.get(t.id) } : t),
+      ...adds.filter(a => !ts.some(t => t.hpPlan && !t.done && t.subjectTodoId === a.subjectTodoId)),
+    ]);
+  }, [tasks, subjectTodos, subjects, syncEmail, syncStatus]);
 
   // 赤チャート（記録のみモード）: 未完了の赤チャートタスクと月次・週次マーカーを外し、
   // 解いた問題の「1発で解けたか」を履歴から判定する。起動ごとに1回（冪等）。
