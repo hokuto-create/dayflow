@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261123-2';
+  const APP_VERSION = '20261123-3';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -2777,7 +2777,7 @@ SAMPLE_SUBJECTS.push(...HIGH_PHYSICS_SUBJECTS);
 SAMPLE_SUBJECT_TODOS.push(...HIGH_PHYSICS_TODOS);
 
 /* ── ハイレベル物理: 1日1題 ──
-   2026-11-24 から毎日1題ずつ、決まった順番で予定に入れる（曜日・系統の区別なし、日曜も入れる）。
+   2026-11-24 から1日1題ずつ、決まった順番で予定に入れる（月〜土。日曜は入れない）。
    ・順番: 例題（力学 → 熱力学・波動 → 電磁気学 → 原子・原子核）→ 演習問題（同じ順）
    ・対象はまだ解いていない問題（未完了・マーク無し）。解いた問題は飛ばす
    ・解いた結果の復習は間隔反復ラダーで別枠に入る（1日1題とは別）
@@ -2815,7 +2815,7 @@ function planHpDaily(tasks, subjectTodos, subjects, today, horizon = HP_HORIZON_
   let d = start;
   for (const td of order) {
     if (!isHpPending(td)) continue;
-    while (d <= end && used.has(d)) d = addDays(d, 1);
+    while (d <= end && (used.has(d) || parseLocalDate(d).getDay() === 0)) d = addDays(d, 1); // 日曜は入れない
     if (d > end) break;
     const slot = d; d = addDays(d, 1);
     assigned.add(td.id);
@@ -9493,7 +9493,7 @@ function App() {
     setSubjectCategories(prev => (prev || []).includes("趣味勉強") ? prev : [...(prev || []), "趣味勉強"]);
   }, [syncEmail, syncStatus]);
 
-  // ハイレベル物理の1日1題: 2026-11-24 から毎日1題、例題（力学→熱力学・波動→電磁気学→原子・原子核）→演習問題の順に
+  // ハイレベル物理の1日1題: 2026-11-24 から月〜土に1題（日曜は入れない）、例題（力学→熱力学・波動→電磁気学→原子・原子核）→演習問題の順に
   // 今日から8週間先まで予定に入れ、解いた・過ぎた分を詰め直す。調整済みなら変化が出ないので setTasks は呼ばれない。
   useEffect(() => {
     if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
