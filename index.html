@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261122-3';
+  const APP_VERSION = '20261123-1';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -2704,6 +2704,77 @@ const RED_CHART_TODOS = buildRedChartTodos(RED_CHART_BOOKS, RED_CHART_SOGO);
 // 新規インストール用シードに反映
 SAMPLE_SUBJECTS.push(...RED_CHART_SUBJECTS);
 SAMPLE_SUBJECT_TODOS.push(...RED_CHART_TODOS);
+
+/* ── ハイレベル物理（趣味勉強 > 高校物理）TODOデータ ──
+   教材（＝subject）は分野ごと（力学／熱力学・波動／電磁気学／原子・原子核）。
+   各教材に「例題」「演習問題」の親TODOを置き、問題番号を子TODOにする。
+   ・examples: 例題番号の配列（"1-1" 形式、または原子・原子核のような通し番号）
+   ・exercises: 演習問題の問題数
+   子TODOの id は決定的（hp_xxx_ex_1-1 など）にし、追記は「subjectId|text」で重複判定する。 */
+const HIGH_PHYSICS_SUBJECTS = [
+  { id: "hp_mech",   name: "ハイレベル物理 力学",        color: "#d14545", category: "趣味勉強", group: "高校物理" },
+  { id: "hp_thermo", name: "ハイレベル物理 熱力学・波動", color: "#3a9d6e", category: "趣味勉強", group: "高校物理" },
+  { id: "hp_em",     name: "ハイレベル物理 電磁気学",    color: "#4a8ed1", category: "趣味勉強", group: "高校物理" },
+  { id: "hp_atom",   name: "ハイレベル物理 原子・原子核", color: "#8b6fcc", category: "趣味勉強", group: "高校物理" },
+];
+
+const HIGH_PHYSICS_BOOKS = [
+  { id: "hp_mech", exercises: 25, examples: [
+    "1-1", "1-2", "2-1", "2-2", "3-1", "4-1", "4-2", "4-3", "5-1", "6-1", "6-2", "7-1",
+    "8-1", "8-2", "9-1", "9-2", "10-1", "10-2", "10-3", "11-1", "11-2",
+    "12-1", "12-2", "12-3", "12-4",
+  ] },
+  { id: "hp_thermo", exercises: 14, examples: [
+    "1-1", "2-1", "2-2", "2-3", "2-4", "2-5", "2-6", "3-1", "3-2", "3-3", "3-4", "3-5", "3-6",
+    "4-1", "5-1", "5-2", "5-3", "5-4", "6-1", "6-2", "7-1", "7-2", "8-1", "8-2",
+    "9-1", "9-2", "9-3", "10-1", "10-2", "10-3",
+  ] },
+  { id: "hp_em", exercises: 11, examples: [
+    "1-1", "2-1", "3-1", "3-2", "3-3", "4-1", "4-2", "5-1", "5-2", "5-3", "6-1", "6-2",
+    "7-1", "8-1", "8-2", "9-1", "9-2", "9-3", "10-1", "10-2",
+  ] },
+  { id: "hp_atom", exercises: 11,
+    examples: Array.from({ length: 14 }, (_, i) => String(i + 1)) },
+];
+
+let _hpSeq = 200000; // 赤チャート(_rcSeq)と十分離した連番
+function buildHighPhysicsTodos(books) {
+  const out = [];
+  books.forEach(book => {
+    const exParentId = `${book.id}_examples`;
+    out.push({
+      id: exParentId, subjectId: book.id,
+      text: `例題（全${book.examples.length}問）`,
+      minutes: null, status: "unwatched", done: false, createdAt: ++_hpSeq,
+    });
+    book.examples.forEach(no => {
+      out.push({
+        id: `${book.id}_ex_${no}`, subjectId: book.id, parentId: exParentId,
+        text: `例題${no}`,
+        minutes: null, status: "unwatched", done: false, createdAt: ++_hpSeq,
+      });
+    });
+    const prParentId = `${book.id}_exercises`;
+    out.push({
+      id: prParentId, subjectId: book.id,
+      text: `演習問題（全${book.exercises}問）`,
+      minutes: null, status: "unwatched", done: false, createdAt: ++_hpSeq,
+    });
+    for (let i = 1; i <= book.exercises; i++) {
+      out.push({
+        id: `${book.id}_pr_${i}`, subjectId: book.id, parentId: prParentId,
+        text: `演習問題${i}`,
+        minutes: null, status: "unwatched", done: false, createdAt: ++_hpSeq,
+      });
+    }
+  });
+  return out;
+}
+const HIGH_PHYSICS_TODOS = buildHighPhysicsTodos(HIGH_PHYSICS_BOOKS);
+
+// 新規インストール用シードに反映
+SAMPLE_SUBJECTS.push(...HIGH_PHYSICS_SUBJECTS);
+SAMPLE_SUBJECT_TODOS.push(...HIGH_PHYSICS_TODOS);
 
 // 既存データ（localStorage / クラウド同期済み）に赤チャートの不足分だけを追記するマイグレーション。
 // ・既存の進捗(status/done)や他データは一切変更しない（純粋に追加のみ）。
@@ -9340,6 +9411,25 @@ function App() {
     setSubjectTodos(prev => {
       const keys = new Set(prev.filter(t => t.subjectId && t.subjectId.startsWith("rc_")).map(t => `${t.subjectId}|${t.text}`));
       const toAdd = RED_CHART_TODOS.filter(t => !keys.has(`${t.subjectId}|${t.text}`));
+      return toAdd.length ? [...prev, ...toAdd] : prev;
+    });
+    setSubjectCategories(prev => (prev || []).includes("趣味勉強") ? prev : [...(prev || []), "趣味勉強"]);
+  }, [syncEmail, syncStatus]);
+
+  // ハイレベル物理（趣味勉強>高校物理）の不足分を既存データへ追記（赤チャートと同じく追加のみ・冪等）。
+  const hpMergedRef = useRef(false);
+  useEffect(() => {
+    if (hpMergedRef.current) return;
+    if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
+    hpMergedRef.current = true;
+    setSubjects(prev => {
+      const toAdd = HIGH_PHYSICS_SUBJECTS.filter(s => !prev.some(x => x.id === s.id));
+      return toAdd.length ? [...prev, ...toAdd] : prev;
+    });
+    setSubjectTodos(prev => {
+      const keys = new Set(prev.filter(t => t.subjectId && t.subjectId.startsWith("hp_")).map(t => `${t.subjectId}|${t.text}`));
+      const ids = new Set(prev.map(t => t.id));
+      const toAdd = HIGH_PHYSICS_TODOS.filter(t => !keys.has(`${t.subjectId}|${t.text}`) && !ids.has(t.id));
       return toAdd.length ? [...prev, ...toAdd] : prev;
     });
     setSubjectCategories(prev => (prev || []).includes("趣味勉強") ? prev : [...(prev || []), "趣味勉強"]);
