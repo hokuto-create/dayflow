@@ -33,7 +33,7 @@
   // 公開中の index.html を取り直して版が違えば、版をクエリに付けて読み込み直す。
   // 起動時とアプリに戻ってきたとき（visibilitychange）だけ確認し、編集の途中では再読み込みしない。
   // クラウド同期の送信待ち（window.__dayflowPushPending）があるときは、変更が消えないよう見送る。
-  const APP_VERSION = '20261123-3';
+  const APP_VERSION = '20261128-1';
   async function checkUpdate() {
     try {
       if (window.__dayflowPushPending) return;
@@ -1030,9 +1030,9 @@ const CPA_MGMT_TRAININGS = [
   ["上級講義", 10, ["トレ 9-4-4", "トレ 10-2-3", "トレ 10-3-1", "トレ 10-3-2", "トレ 10-3-3", "トレ 10-3-4"]],
   ["上級講義", 11, ["トレ 10-5-1", "トレ 10-5-2"]]
 ];
-// 企業法は講義の回ごとに、授業の直後に一問一答、翌日に短答問題集を解く。
+// 企業法は講義の回ごとに、授業の直後にweb確認問題（一問一答のwebページ）、翌日に短答問題集を解く。
 // 対応表の各回のミニテストの後ろに足し、対応表に無い回（上級講義など）も講義の回数どおりに足す。
-const CPA_LAW_PER_LECTURE = ["一問一答", "短答問題集"];
+const CPA_LAW_PER_LECTURE = ["web確認問題", "短答問題集"];
 function withLawPerLecture(table) {
   const law = CPA_LECTURE_SUBJECTS.find(x => x.id === "s_law");
   const out = [];
@@ -1046,7 +1046,7 @@ function withLawPerLecture(table) {
   });
   return out;
 }
-// 企業法のトレーニング: 講義ごとの一問一答・短答問題集（withLawPerLecture で足す）とミニテストだけ。
+// 企業法のトレーニング: 講義ごとのweb確認問題・短答問題集（withLawPerLecture で足す）とミニテストだけ。
 // テキストの小単元ごとの復習は出さない（版13で廃止）。
 // 各回の先頭のミニテストは進度表のミニテスト欄（配布のみ）のとおり: 第2〜19回の最初に第1〜18回を解く。
 const CPA_LAW_TRAININGS = withLawPerLecture([
@@ -1081,17 +1081,17 @@ const CPA_AUDIT_TRAININGS = [
 const CPA_TRAININGS = [["s_calc", CPA_CALC_TRAININGS], ["s_mgmt", CPA_MGMT_TRAININGS], ["s_law", CPA_LAW_TRAININGS], ["s_audit", CPA_AUDIT_TRAININGS]];
 // 受講してから1回目をやるまでの日数（計算科目は当日、理論科目の小単元の復習は翌日）
 const CPA_TRAINING_DELAY = { s_law: 1, s_theory: 1, s_audit: 1 };
-// 項目ごとの日数（科目の日数より優先）: 一問一答は授業の直後、短答問題集は翌日
-const CPA_ITEM_DELAY = [[/^一問一答/, 0], [/^短答問題集/, 1]];
+// 項目ごとの日数（科目の日数より優先）: web確認問題は授業の直後、短答問題集は翌日
+const CPA_ITEM_DELAY = [[/^web確認問題/, 0], [/^短答問題集/, 1]];
 function cpaTrainingDelay(t) {
   const hit = CPA_ITEM_DELAY.find(([re]) => re.test(t.text || ""));
   return hit ? hit[1] : (CPA_TRAINING_DELAY[t.subjectId] || 0);
 }
 // 予定のタイトルに使う問題名。ミニテストは区分ごとに①から振り直されるので区分名を、
-// 回ごとの一問一答・短答問題集はどの回の範囲かが分かるように回を付ける。
+// 回ごとのweb確認問題・短答問題集はどの回の範囲かが分かるように回を付ける。
 function cpaTrainingProblem(secTitle, n, item) {
   if (/^ミニテスト/.test(item)) return `${secTitle} ${item}`;
-  // 企業法は入門基礎マスターだけなので区分名もかっこも付けない（「一問一答 第N回」）
+  // 企業法は入門基礎マスターだけなので区分名もかっこも付けない（「web確認問題 第N回」）
   if (CPA_LAW_PER_LECTURE.includes(item)) return `${item} 第${n}回`;
   return item;
 }
@@ -1159,7 +1159,31 @@ function renameMgmtTrainingLabels(subjectTodos, tasks) {
     changed: todosChanged || tasksChanged };
 }
 
-// 企業法のテキストの小単元ごとの復習（一問一答・短答問題集・ミニテスト以外のトレーニング）を消す（既存データ用・冪等）。
+// 企業法の「一問一答」を「web確認問題」に改める（既存データ用・冪等）。トレーニングTODO（text・problem）と、
+// それに紐づく予定（復習を含む）のタイトルを書き換える。名前だけを変え、ID・解いた結果・復習ラダーの段階・
+// 次の復習日はそのまま残す。返り値: { subjectTodos, tasks, changed }
+function renameLawWebQA(subjectTodos, tasks) {
+  const OLD = "一問一答", NEW = "web確認問題";
+  const isLawQA = t => t.subjectId === "s_law" && t.track === "training" && t.parentId;
+  let todosChanged = false;
+  const todosOut = subjectTodos.map(t => {
+    if (!isLawQA(t) || t.text !== OLD) return t;
+    todosChanged = true;
+    return { ...t, text: NEW, problem: (t.problem || OLD).replace(OLD, NEW) };
+  });
+  // 紐づく予定のタイトル中の旧名を置き換える（TODOが他端末で改名済みで、予定だけ旧名の場合も直す）
+  const todoById = new Map(todosOut.map(t => [t.id, t]));
+  let tasksChanged = false;
+  const tasksOut = tasks.map(x => {
+    const td = x.subjectTodoId && todoById.get(x.subjectTodoId);
+    if (!td || !isLawQA(td) || td.text !== NEW || !(x.title || "").includes(OLD)) return x;
+    tasksChanged = true;
+    return { ...x, title: x.title.replace(OLD, NEW) };
+  });
+  return { subjectTodos: todosChanged ? todosOut : subjectTodos, tasks: tasksChanged ? tasksOut : tasks,
+    changed: todosChanged || tasksChanged };
+}
+// 企業法のテキストの小単元ごとの復習（web確認問題・短答問題集・ミニテスト以外のトレーニング）を消す（既存データ用・冪等）。
 // TODOと、それに紐づく未完了の予定（復習を含む）を外す。完了済みの予定は振り返り用に残す。
 function isLawTextReview(t) {
   return t.subjectId === "s_law" && t.track === "training" && t.parentId
@@ -1234,8 +1258,8 @@ function fixCalcMiniLinks(todos) {
 // 対応表にあってまだ登録されていないトレーニング・ミニテストを作る（後から対応表を足したとき用・冪等）。
 // トレーニングが1つも無い科目はまとめて作り、ある科目は足りない項目（と回の入れ物）だけを足す。
 function missingCpaTrainingTodos(todos) {
-  // 管理会計の旧名（計算 x-x-x）のまま残っているTODOも、改名後の名前で既にあるものとして数える
-  todos = renameMgmtTrainingLabels(todos, []).subjectTodos;
+  // 管理会計の旧名（計算 x-x-x）・企業法の旧名（一問一答）のまま残っているTODOも、改名後の名前で既にあるものとして数える
+  todos = renameLawWebQA(renameMgmtTrainingLabels(todos, []).subjectTodos, []).subjectTodos;
   const missing = CPA_TRAININGS.map(([sid]) => sid)
     .filter(sid => !todos.some(t => t.subjectId === sid && t.track === "training" && t.lectureTodoId));
   const out = missing.length ? buildCpaTrainingTodos(todos, missing) : [];
@@ -1274,7 +1298,7 @@ function missingCpaTrainingTodos(todos) {
 // まだ解いていない（未完了・マーク無し）で、未完了の予定も無い問題だけを対象にする。
 // lectureTask（完了した講義の予定）を渡すと、当日に解く科目（計算科目）のトレーニングは
 // 講義と同じ日のリストに入れ、講義のすぐ後ろに並ぶようにする（followsTaskId。古い日付の講義でも同じ）。
-// 当日か翌日かは項目ごとに決まる（cpaTrainingDelay。企業法の一問一答は当日、短答問題集・小単元は翌日）。
+// 当日か翌日かは項目ごとに決まる（cpaTrainingDelay。企業法のweb確認問題は当日、短答問題集・小単元は翌日）。
 function trainingTasksForLecture(lectureTodoId, subjectTodos, tasks, date, lectureTask) {
   if (!lectureTodoId) return [];
   const subjName = (sid) => (CPA_LECTURE_SUBJECTS.find(x => x.id === sid) || {}).name || "";
@@ -3259,7 +3283,7 @@ function DayView({ tasks, setTasks, selectedDate, setSelectedDate, goals, subjec
     // 講義はチェックだけで受講済みにする（解けた/解けなかったは聞かない）
     if (task.isLecture) {
       // その回のトレーニングを、講義と同じ日のリストの講義のすぐ後ろに入れる（受講したらすぐ解く）。
-      // 理論科目の小単元の復習・企業法の短答問題集は翌日に入る（企業法の一問一答は当日）。
+      // 理論科目の小単元の復習・企業法の短答問題集は翌日に入る（企業法のweb確認問題は当日）。
       const newTr = trainingTasksForLecture(task.subjectTodoId, subjectTodos, tasks, todayStr(), task);
       setTasks(ts => [
         ...ts.map(t => t.id === task.id ? { ...t, done: true, doneAt: new Date().toISOString() } : t),
@@ -9532,7 +9556,7 @@ function App() {
   // ・財計/財理/管理会計/企業法/監査論の講義TODOを入れ、財計・管理会計・企業法は日曜以外1日1コマで予定に入れる
   // メール設定済みなら初回クラウド取得の完了後に実行する（他端末で実行済みならフラグが同期されて再実行しない）。
   // ※旧来の「例題タブへの移行」「例題・トレーニングの親を自動で作る」処理は、作り直しで不要になったので廃止。
-  // 管理会計のトレーニング名を「計算 x-x-x」→「入門トレ / トレ x-x-x」に改める（既存データ用・冪等）。
+  // 管理会計のトレーニング名を「計算 x-x-x」→「入門トレ / トレ x-x-x」に、企業法の「一問一答」→「web確認問題」に改める（既存データ用・冪等）。
   // 下の作り直し（足りないトレーニングの追加）より先に走らせ、旧名のTODOを重複して足さないようにする。
   // メール設定済みなら初回クラウド取得の完了後に実行する。
   const mgmtRenameRef = useRef(false);
@@ -9541,11 +9565,12 @@ function App() {
     if (syncEmail && syncStatus !== "synced") return; // 初回pullの完了を待つ
     mgmtRenameRef.current = true;
     const snapshotTodos = subjectTodos;
-    setSubjectTodos(prev => renameMgmtTrainingLabels(prev, []).subjectTodos);
+    setSubjectTodos(prev => renameLawWebQA(renameMgmtTrainingLabels(prev, []).subjectTodos, []).subjectTodos);
     setTasks(prev => {
       // 予定のタイトルは改名後のTODO（関数形式で最新を取れないので、手元の一覧を改名したもの）を元に直す
       const r = renameMgmtTrainingLabels(snapshotTodos, prev);
-      return r.tasks;
+      // 企業法の「一問一答」→「web確認問題」も同じく（名前だけ。解いた結果・復習ラダーはそのまま）
+      return renameLawWebQA(r.subjectTodos, r.tasks).tasks;
     });
   }, [syncEmail, syncStatus]);
 
@@ -9627,8 +9652,8 @@ function App() {
     };
     // 版14（版15で短答問題集も、版16・17でかっこも）: 企業法の一問一答の名前から「入門基礎マスター」を外す（TODOの問題名と予定のタイトル）
     const renameLawQA = () => {
-      const fix = x => (x || "").replace(/(一問一答|短答問題集)（入門基礎マスター (第\d+回)）/, "$1（$2）")
-        .replace(/(一問一答|短答問題集)（(第\d+回)）/, "$1 $2");
+      const fix = x => (x || "").replace(/(一問一答|web確認問題|短答問題集)（入門基礎マスター (第\d+回)）/, "$1（$2）")
+        .replace(/(一問一答|web確認問題|短答問題集)（(第\d+回)）/, "$1 $2");
       setSubjectTodos(prev => prev.map(t => t.subjectId === "s_law" && t.problem && fix(t.problem) !== t.problem ? { ...t, problem: fix(t.problem) } : t));
       setTasks(prev => prev.map(t => t.title && fix(t.title) !== t.title ? { ...t, title: fix(t.title) } : t));
     };
